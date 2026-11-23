@@ -56,8 +56,10 @@ and 75th residual. The board ranks on the point estimate and draws the band behi
 
 - **A protocol whose token already trades is never scored.** It is shown in *Token trades* with its
   multiple against the curve. Those records are the fit and the premiums.
-- **A product is not a launch.** Below the floor the board applies the house's watchlist rule and leaves
-  out wrapped, staked, bridged and versioned products.
+- **A product is not a launch.** The board applies the house's watchlist rule at every size and leaves
+  out wrapped, staked, bridged and versioned products: 144 of this snapshot's 342 pre-token records.
+- **The floor marks, it does not filter.** Every record the rule admits is ranked, and a row below the
+  $50M floor says so on the board instead of disappearing.
 - **A record is not proof.** The page says "records no token", never "has none".
 
 ## Odds and verdicts

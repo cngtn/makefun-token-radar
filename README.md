@@ -56,13 +56,13 @@ It also carries a **base rate** from the record — of the protocols in its cate
 tracked two years or more, the share that record a token, with the k of n printed — and a **costed
 verdict**: expected net value per hour of attention and per dollar at risk, after the plan's gas and the
 carry on locked capital, at the base rate and an assumed 0.001% share of the claimed value. Both
-assumptions are printed beside the number. 85 of 178 plans do not pay at that base rate, and the row
+assumptions are printed beside the number. 91 of 198 plans do not pay at that base rate, and the row
 says so rather than hiding it.
 
 No protocol name is special-cased. Protocols whose token already trades are never scored: they are
 shown at their own market cap in a separate view, and their records are the curve and the premiums the
 model is read from. The page recomputes every row's value from its own rounded factors in the same
-order the model does and reports how many it reproduced — all 178 on this snapshot.
+order the model does and reports how many it reproduced — all 198 on this snapshot.
 
 `DESIGN.md` has the reasoning in full, including why a flat-median first version overpriced the top of
 the board by about ten times, and what each held-out test changed; `dashboard/model.md` is the version
@@ -75,7 +75,7 @@ the judge reads beside the page's source.
 
 | Path | What it is |
 | --- | --- |
-| `board.json` | the ranked board: 178 rows, ranks 1..178, an implied value and a farm plan each |
+| `board.json` | the ranked board: 198 rows, ranks 1..198, an implied value and a farm plan each |
 | `data.js` | the page's dataset as one classic script |
 | `dashboard/` | this repository's dashboard, plus a generated `board-preview.json` build manifest |
 | `screenshots/` | the board, a detail view and a filtered view |

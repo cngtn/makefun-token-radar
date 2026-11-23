@@ -165,7 +165,8 @@ const at50 = Math.exp(radar.model.fit.a + radar.model.fit.b * Math.log(5e7));
 const at1b = Math.exp(radar.model.fit.a + radar.model.fit.b * Math.log(1e9));
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${radar.meta.pre_token} record no token, ` +
-    `${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.meta.below_floor} below the floor)\n` +
+    `${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored ` +
+    `(${radar.meta.watchlist} on the list, ${radar.meta.off_list} above the floor off it, ${radar.meta.below_floor} below the floor)\n` +
     `token radar: the size curve is ${at50.toFixed(3)}x at $50M and ${at1b.toFixed(3)}x at $1B ` +
     `(slope ${radar.model.fit.b.toFixed(3)} on ${radar.model.fit.n} priced tokens); rank 1 is ${top.name} at $${top.implied_value_usd.toLocaleString('en-US')}\n` +
     `token radar: wrote board.json, data.js, dashboard/ (${DASHBOARD_FILES.length + 1} files, ${dashboardBytes} bytes), ` +

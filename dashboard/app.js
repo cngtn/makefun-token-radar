@@ -151,7 +151,7 @@
   function renderFacts() {
     var covered = R.rows.filter(function (r) { return r.tier === 'watchlist'; }).length;
     var items = [
-      ['Protocols ranked', String(R.meta.board_size), R.meta.watchlist + ' on the watchlist, ' + R.meta.below_floor + ' below the floor'],
+      ['Protocols ranked', String(R.meta.board_size), R.meta.watchlist + ' on the list, ' + R.meta.off_list + ' off it, ' + R.meta.below_floor + ' below'],
       ['Watchlist covered', covered + '/' + R.meta.watchlist, 'every slug the snapshot names'],
       ['Priced tokens', String(R.meta.with_mcap), 'the size curve, of ' + R.meta.token_bearing + ' with a token'],
       ['TVL in scope', usd(R.meta.tvl_in_scope), 'across the rows that record no token']
@@ -207,10 +207,10 @@
     if (state.q) chips.push('<span class="chip">find: ' + esc(state.q) + '</span>');
     if (state.cat !== '*') chips.push('<span class="chip">category: ' + esc(state.cat) + '</span>');
     if (state.ev !== '*') chips.push('<span class="chip amber">evidence: ' + esc(state.ev === 'deep' ? '10+ peers' : state.ev === 'fair' ? '5 to 9 peers' : 'under 5 peers') + '</span>');
-    if (state.tier !== '*') chips.push('<span class="chip grey">' + esc(state.tier === 'watchlist' ? 'house watchlist' : 'below the floor') + '</span>');
+    if (state.tier !== '*') chips.push('<span class="chip grey">' + esc(state.tier === 'watchlist' ? 'house watchlist' : state.tier === 'off-list' ? 'above the floor, off the list' : 'below the floor') + '</span>');
     if (state.sort !== 'rank') chips.push('<span class="chip grey">sorted by ' + esc(state.sort === 'age' ? 'time without a token' : state.sort) + '</span>');
     $('status').innerHTML = '<span>Snapshot ' + esc(R.meta.as_of) + ' · ' + rows.length + ' of ' + R.rows.length + ' rows</span>' + chips.join('') +
-      '<span class="aside">The ' + R.meta.token_bearing + ' protocols whose record carries a token are shown in Token trades, never scored.</span>';
+      '<span class="aside">' + (R.meta.pre_token - R.meta.board_size) + ' of the ' + R.meta.pre_token + ' pre-token records are products of a token that trades; protocols that carry a token sit in Token trades, never scored.</span>';
     $('empty').hidden = rows.length > 0;
     $('empty').textContent = rows.length ? '' : 'No protocol matches that filter. Clear one and the board comes back.';
   }
@@ -265,7 +265,8 @@
     return '<div class="row" role="row" tabindex="-1" data-slug="' + esc(row.slug) + '">' +
       '<span class="rank" role="cell">' + row.rank + '</span>' +
       '<div class="who" role="cell"><b>' + esc(row.name) + '</b><small>' + esc(catLabel(row)) + ' · ' + esc(chainLine(row.chains, 2)) +
-        (row.tier === 'below-floor' ? '<span class="tag">below floor</span>' : '') + '</small></div>' +
+        (row.tier === 'below-floor' ? '<span class="tag">below floor</span>' : row.tier === 'off-list' ? '<span class="tag">off watchlist</span>' : '') +
+        (row.change_7d === null || row.listed_at === null ? '<span class="tag">thin record</span>' : '') + '</small></div>' +
       '<div class="num-cell" role="cell">' + usd(row.tvl_usd) + '<small>TVL</small></div>' +
       '<div class="delta ' + g + '" role="cell">' + pct(row.change_7d) + '</div>' +
       '<div class="num-cell" role="cell">' + track(row.age_days) + '<small>tracked</small></div>' +
@@ -335,13 +336,14 @@
     state.slug = slug;
     var f = row.factors;
     var v = row.verdict;
-    var trophy = row.tier === 'watchlist' ? 'house watchlist' : 'below the $' + Math.round(R.meta.floor_usd / 1e6) + 'M floor';
+    var trophy = row.tier === 'watchlist' ? 'house watchlist' : row.tier === 'off-list' ? 'above the $' + Math.round(R.meta.floor_usd / 1e6) + 'M floor, off the list' : 'below the $' + Math.round(R.meta.floor_usd / 1e6) + 'M floor';
     var draw = $('drawer');
     draw.innerHTML = '<div class="drawer-in">' +
       '<div class="drawer-top"><div>' +
         '<div class="eyebrow">Rank ' + row.rank + ' of ' + R.meta.board_size + ' · ' + trophy + ' · records no token</div>' +
         '<h2>' + esc(row.name) + '</h2>' +
-        '<p class="sub"><em>' + esc(catLabel(row)) + '</em> · ' + esc(chainLine(row.chains, 4)) + ' · tracked since ' + esc(row.listed_at || 'an unrecorded date') + '</p>' +
+        '<p class="sub"><em>' + esc(catLabel(row)) + '</em> · ' + esc(chainLine(row.chains, 4)) + ' · tracked since ' + esc(row.listed_at || 'an unrecorded date') +
+          (row.change_7d === null ? ' · no 7-day change on record' : '') + '</p>' +
       '</div><button type="button" class="close" id="drawer-close" aria-label="Close the detail view">×</button></div>' +
 
       '<div class="drawer-cols"><div class="col">' +

@@ -89,9 +89,15 @@ distribution than in the tail, and the band on every row is the honest answer to
 2. **v2** replaced it with the fitted size curve and a category premium at k = 5. Rank 1 fell to
    $136.7M, the top twenty stopped being one category, and the board applied the house's product rule
    below the floor, so an LST is never ranked as a token still to come.
-3. **v3** (this one) put every term to a leave-one-out test: the premium moved to k = 20, the week's
-   weight fell from 0.45 to 0.15, and the board now prints its held-out error, its thin-peer count, a
-   base rate per row and a costed verdict per plan.
+3. **v3** put every term to a leave-one-out test: the premium moved to k = 20, the week's weight fell
+   from 0.45 to 0.15, and the board printed its held-out error, its thin-peer count, a base rate per
+   row and a costed verdict per plan.
+4. **v4 and v5** moved the model's evidence onto the page — nearest priced peers, a sensitivity line, a
+   named driver — then audited the page numerically: 42 assertions over five views, hash routing,
+   keyboard rows and the fit drawn as SVG.
+5. **v6** removed the last cap on the subjects: the board had ranked every below-floor record the rule
+   admits but only the above-floor ones the watchlist names. It now ranks every record the rule admits
+   at every size, so the floor labels a row instead of dropping it.
 
 ## The band
 
@@ -131,12 +137,12 @@ per hour = net / hours        per dollar = net / capital
 The two assumptions are printed beside the number: a qualifying wallet receives **0.001%** of the
 claimed value, and capital carries **5% a year** while it is locked. The verdict is linear in the share,
 so a reader who prefers 0.005% multiplies by five. Plans that do not pay at the base rate show a
-negative verdict and the row stays on the board — 85 of 178 do, which is the point of printing it.
+negative verdict and the row stays on the board — 91 of 198 do, which is the point of printing it.
 
 ## What the model does not do (printed on the page)
 
 - The snapshot is sealed at its fetch date; nothing on the page is newer.
-- 89 of 178 rows rest on fewer than three priced peers and take the market's premium.
+- 102 of 198 rows rest on fewer than three priced peers and take the market's premium.
 - Only 128 of 416 token-bearing protocols carry a market cap, so the curve rests on those.
 - The held-out typical error is 3.36×; the tail is worse.
 - The odds are a cohort base rate with survivor bias; no row predicts a launch or its date.
@@ -180,7 +186,7 @@ the number:
   four-year record, or the 75th-percentile premium) with the percentage it would add or take away.
 
 All three are computed in `lib/model.ts` and written into `board.json`, so the page renders numbers it
-can check rather than deriving them: 178 rows recompute exactly.
+can check rather than deriving them: 198 rows recompute exactly.
 
 ## The page, audited rather than guessed
 
@@ -221,15 +227,23 @@ the page. A filter or sort survives a reload because it lives in the address. Ro
 
 **One visual earns its place.** The method view draws the fit: every priced protocol as a grey point
 (TVL against its own `mcap/TVL`), every board row as a mint point at the multiple it is priced with, and
-the fitted curve as a blue line through them — 306 circles and a 25-segment polyline, built as SVG from
+the fitted curve as a blue line through them — 326 circles and a 25-segment polyline, built as SVG from
 the data with no library and no image file. It is the one thing a reader cannot get from the table: the
 model is fitted, and the rows sit where the curve says.
 
 ## The board and its subjects
 
-All 40 house-watchlist protocols, plus the 138 pre-token protocols below the $50M floor with the most
-TVL after the house's product rule: **178 rows**, ranks 1..178 by descending implied value, ties broken
-by slug so two runs give the same bytes. 178 distinct implied values on this snapshot.
+All 40 house-watchlist protocols, the 20 protocols above the $50M floor that the list leaves out
+(DefiLlama records a parent for them, which the snapshot's ten fields do not carry), and all 138
+pre-token protocols below the floor that the product rule admits: **198 of the snapshot's 342
+pre-token records**, ranks 1..198 by descending implied value, ties broken by slug so two runs give
+the same bytes. 198 distinct implied values on this snapshot.
+
+The 144 records the board does not rank are products of a token that already trades: 42 CEX products,
+43 bridge products, 43 liquid-staking derivatives and 16 versioned or exchange-named products. The
+page counts them beside the board, so the radar states its denominator instead of hiding it. The floor
+marks a row now, it does not filter one: a protocol below $50M is ranked and carries a "below floor"
+tag, and a protocol above the floor that the watchlist does not name carries "off watchlist".
 
 ## Farm plans
 

@@ -97,9 +97,6 @@ const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 const PRODUCT_NAME = /\b(wrapped|staked|staking)\b/i;
 const EXCHANGE_NAME = /^\s*(binance|coinbase|bybit|kraken|bitget|okx|bitfinex|gemini)/i;
 
-/** How many pre-token protocols below the floor the early radar adds, by TVL, at most. */
-export const EARLY_ROWS = 200;
-
 /** How many token-bearing protocols the "already trades" view carries, by market cap. */
 export const LIVE_ROWS = 24;
 
@@ -227,7 +224,8 @@ export interface BoardRow {
   gecko_id: null;
   symbol: null;
   token_status: 'pre-token';
-  tier: 'watchlist' | 'below-floor';
+  /** On the house watchlist, above the floor but left off it, or below the floor: all three are ranked. */
+  tier: 'watchlist' | 'below-floor' | 'off-list';
   age_days: number | null;
   implied_value_usd: number;
   implied_low_usd: number;
@@ -292,6 +290,8 @@ export interface RadarData {
     watchlist: number;
     board_size: number;
     below_floor: number;
+    /** Above the floor but left off the house's watchlist: still a subject, ranked and marked. */
+    off_list: number;
     tvl_in_scope: number;
   };
   validation: Validation;
@@ -777,7 +777,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   const table = peerTable(snapshot.protocols, model);
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
-  const tier = new Map<string, 'watchlist' | 'below-floor'>();
+  const tier = new Map<string, 'watchlist' | 'below-floor' | 'off-list'>();
   // The watchlist is the floor, never the ceiling: every slug on it is on the board.
   for (const slug of snapshot.watchlist) {
     const p = index.get(slug);
@@ -785,15 +785,14 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     chosen.set(slug, p);
     tier.set(slug, 'watchlist');
   }
-  // The early radar: pre-token protocols under the floor with the most TVL, minus the wrapped, staked,
-  // bridged and versioned products the house's own rule keeps off the watchlist above the floor.
-  const early = snapshot.protocols
-    .filter((p) => !chosen.has(p.slug) && recordsNoToken(p) && !productOfToken(p) && p.tvl_usd < snapshot.floor_usd)
-    .sort((a, b) => b.tvl_usd - a.tvl_usd || bySlugOrder(a.slug, b.slug))
-    .slice(0, EARLY_ROWS);
-  for (const p of early) {
+  // The whole radar: every protocol whose record carries no token and that is not a wrapped, staked
+  // or bridged product of one that already trades, at every size. The floor now labels a row instead
+  // of filtering it, so a protocol below it is ranked and marked rather than dropped, and the floor is
+  // still meaningful because every row below it says so.
+  for (const p of snapshot.protocols) {
+    if (chosen.has(p.slug) || !recordsNoToken(p) || productOfToken(p)) continue;
     chosen.set(p.slug, p);
-    tier.set(p.slug, 'below-floor');
+    tier.set(p.slug, p.tvl_usd < snapshot.floor_usd ? 'below-floor' : 'off-list');
   }
 
   const priced = snapshot.protocols.filter((p) => ratioOf(p, model) !== null);
@@ -900,6 +899,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       watchlist: snapshot.watchlist.length,
       board_size: board.length,
       below_floor: board.filter((r) => r.tier === 'below-floor').length,
+      off_list: board.filter((r) => r.tier === 'off-list').length,
       tvl_in_scope: board.reduce((n, r) => n + r.tvl_usd, 0),
     },
     model: {
