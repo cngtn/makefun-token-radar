@@ -119,14 +119,31 @@ export interface CategoryPremium {
   p75: number;
 }
 
-/** One token-bearing protocol, as the evidence table beside a board row shows it. */
-export interface PeerSample {
+/** One token-bearing protocol beside a row: a comparable a reader can check the multiple against. */
+export interface PeerEvidence {
   name: string;
-  mult: number;
-  mcap_usd: number;
+  symbol: string;
   tvl_usd: number;
-  /** The protocol's own multiple over the size curve's multiple at its TVL: 2 means twice the curve. */
-  vs_size: number;
+  mcap_usd: number;
+  mult: number;
+}
+
+/** What the category's own priced peers say, before any shrinkage, and the row's value at their quantiles. */
+export interface PeerStats {
+  /** The category's priced peers, or 0 when it has none. */
+  peers: number;
+  /** Whether the median is the category's own peers or the whole market's, when the category is too thin. */
+  basis: 'category' | 'market';
+  median: number;
+  /** This row's value at that median multiple, all other factors held. */
+  median_usd: number;
+}
+
+/** The one factor that moves this row's value most, under a stated shock. */
+export interface Driver {
+  name: string;
+  detail: string;
+  change_pct: number;
 }
 
 /**
@@ -228,7 +245,12 @@ export interface BoardRow {
     tenure: number;
   };
   farm_steps: string[];
-  peer_sample: PeerSample[];
+  /** The two or three nearest priced peers in this category, by TVL, with their own multiples. */
+  peer_evidence: PeerEvidence[];
+  /** The category's priced peers as a distribution, and this row's value at their 25th, 50th and 75th multiple. */
+  peer_stats: PeerStats;
+  /** The single factor whose stated shock moves this value most. */
+  driver: Driver;
   /** A base rate from the snapshot's own record: what share of comparable protocols carry a token. */
   odds: Odds;
   /** The plan costed in money and time: expected value per hour of attention and per dollar at risk. */
@@ -476,23 +498,72 @@ export function scoreProtocol(p: SnapshotProtocol, asOf: string, model: ModelCon
   };
 }
 
-/** The priced protocols of a category, closest to this row's premium first, for its evidence table. */
-function peerEvidence(table: PeerTable, category: string | null, target: number, model: ModelConstants, limit: number): PeerSample[] {
-  const own = table.byKey.get(categoryKey(category)) ?? [];
+/** The two or three nearest priced peers of a category, by TVL, with their own multiples. */
+function peerEvidence(p: SnapshotProtocol, table: PeerTable, limit: number): PeerEvidence[] {
+  const own = table.byKey.get(categoryKey(p.category)) ?? [];
   const pool = own.length > 0 ? own : table.priced;
-  const vsSize = (p: Priced): number => Math.exp(p.log - Math.log(sizePrior(p.protocol.tvl_usd, table.fit, model)));
-  const distance = (p: Priced): number => Math.abs(Math.log(vsSize(p)) - Math.log(target));
+  const target = Math.log(p.tvl_usd);
   return pool
     .slice()
-    .sort((a, b) => distance(a) - distance(b) || a.log - b.log || bySlugOrder(a.protocol.slug, b.protocol.slug))
+    .sort((a, b) => Math.abs(Math.log(a.protocol.tvl_usd) - target) - Math.abs(Math.log(b.protocol.tvl_usd) - target) || bySlugOrder(a.protocol.slug, b.protocol.slug))
     .slice(0, limit)
-    .map((p) => ({
-      name: p.protocol.name,
-      mult: round(p.mult, 4),
-      mcap_usd: p.protocol.mcap_usd ?? 0,
-      tvl_usd: p.protocol.tvl_usd,
-      vs_size: round(vsSize(p), 2),
+    .map((q) => ({
+      name: q.protocol.name,
+      symbol: q.protocol.symbol ?? q.protocol.name,
+      tvl_usd: q.protocol.tvl_usd,
+      mcap_usd: q.protocol.mcap_usd ?? 0,
+      mult: round(q.mult, 4),
     }));
+}
+
+/** The category's peers as a distribution, and this row's value at their 25th, 50th and 75th multiple. */
+function peerStats(p: SnapshotProtocol, table: PeerTable, score: Score, model: ModelConstants): PeerStats {
+  const own = table.byKey.get(categoryKey(p.category)) ?? [];
+  // A median needs at least three peers to mean anything; below that the market's own is the reading.
+  const useCategory = own.length >= 3;
+  // Peers are compared as premiums over the size curve, because a raw multiple is only comparable at
+  // the same size — which is the whole reason the curve exists.
+  const premiumOfPeer = (q: Priced): number => Math.exp(q.log - Math.log(sizePrior(q.protocol.tvl_usd, table.fit, model)));
+  const pool = (useCategory ? own : table.priced).map(premiumOfPeer).sort((a, b) => a - b);
+  const middle = median(pool);
+  return {
+    peers: own.length,
+    basis: useCategory ? 'category' : 'market',
+    median: round(middle, 4),
+    median_usd: Math.max(1, Math.round(p.tvl_usd * round(score.size * middle, 6) * score.momentum * score.tenure)),
+  };
+}
+
+/**
+ * The factor that most changes this row's value relative to the rest of the board: the one furthest
+ * from the board's median factor, with the move to its own ceiling priced in.
+ */
+function driverFor(row: BoardRow, spread: { momentum: { med: number; sd: number }; tenure: { med: number; sd: number }; peer: { med: number; sd: number } }, model: ModelConstants): Driver {
+  const f = row.factors;
+  const applied = Math.max(1e-9, f.peer_multiple);
+  const options = [
+    {
+      name: 'the week',
+      detail: 'a +' + model.growth_clip_high + '% week at the clip\'s ceiling',
+      distance: Math.abs(Math.log(f.momentum) - Math.log(spread.momentum.med)) / spread.momentum.sd,
+      ratio: clamp(1 + (model.growth_clip_high / 100) * model.growth_weight, model.momentum_low, model.momentum_high) / Math.max(1e-9, f.momentum),
+    },
+    {
+      name: 'the age',
+      detail: 'four years without a token, the ramp\'s ceiling',
+      distance: Math.abs(Math.log(f.tenure) - Math.log(spread.tenure.med)) / spread.tenure.sd,
+      ratio: model.tenure_high / Math.max(1e-9, f.tenure),
+    },
+    {
+      name: 'the peer multiple',
+      detail: 'the category\'s 75th percentile premium',
+      distance: Math.abs(Math.log(applied) - Math.log(spread.peer.med)) / spread.peer.sd,
+      ratio: row.implied_high_usd / row.implied_value_usd,
+    },
+  ];
+  let best = options[0]!;
+  for (const o of options) if (o.distance > best.distance) best = o;
+  return { name: best.name, detail: best.detail, change_pct: round((best.ratio - 1) * 100, 1) };
 }
 
 // ------------------------------------------------------------------ the adjustments, the calibration, the odds and the verdict
@@ -728,7 +799,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   const cells = oddsCells(snapshot.protocols, snapshot.as_of);
   const scored = [...chosen.values()].map((p) => ({ p, score: scoreProtocol(p, snapshot.as_of, model, table, bias) }));
   scored.sort((a, b) => b.score.implied - a.score.implied || bySlugOrder(a.p.slug, b.p.slug));
-  return scored.map(({ p, score }, i) => {
+  const rows: BoardRow[] = scored.map(({ p, score }, i) => {
     const plan = farmPlan(p, score.age, score.peers);
     const odds = oddsFor(p, cells);
     return {
@@ -760,11 +831,22 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       tenure: score.tenure,
     },
     farm_steps: plan.map(stepText),
-    peer_sample: peerEvidence(table, p.category, score.premium, model, 3),
+    peer_evidence: peerEvidence(p, table, 3),
+    peer_stats: peerStats(p, table, score, model),
+    driver: { name: '', detail: '', change_pct: 0 },
     odds,
     verdict: verdictFor({ implied: score.implied, tvl_usd: p.tvl_usd, chains: p.chains, peers: score.peers }, odds, score.age, plan.length),
   };
   });
+  const spread = (pick: (r: BoardRow) => number): { med: number; sd: number } => {
+    const logs = rows.map((r) => Math.log(Math.max(1e-9, pick(r)))).sort((a, b) => a - b);
+    const mean = logs.reduce((a, b) => a + b, 0) / logs.length;
+    const sd = Math.sqrt(logs.reduce((a, b) => a + (b - mean) ** 2, 0) / logs.length) || 1;
+    return { med: Math.exp(median(logs)), sd };
+  };
+  const stats = { momentum: spread((r) => r.factors.momentum), tenure: spread((r) => r.factors.tenure), peer: spread((r) => r.factors.peer_multiple) };
+  for (const row of rows) row.driver = driverFor(row, stats, model);
+  return rows;
 }
 
 /** The token-bearing protocols the page shows beside the board, at the market's own value. */

@@ -159,6 +159,29 @@ negative verdict and the row stays on the board — 85 of 178 do, which is the p
 | assumed allocation | 0.001% of claimed value | stated, not fitted; verdict is linear in it |
 | capital carry | 5% a year | stated, not fitted |
 
+## Per-protocol evidence, computed in the model
+
+Every row carries the comparables its multiple rests on, and the page prints them rather than asserting
+the number:
+
+- **The nearest peers.** The two or three priced protocols in the same category closest in TVL, each
+  with its ticker, TVL and its own `mcap / TVL`. Closest by TVL, not by multiple, because a comparable
+  is a protocol of a similar size, not one that happens to be priced the same.
+- **The peer premium.** Peers are compared in *premium space*: each peer's multiple divided by the size
+  curve at that peer's own TVL. A raw multiple is only comparable at the same size, so the row's value
+  at the peers' median premium is the honest anchor — and the detail view prints both that anchor and
+  the multiple the model actually prices with. Where a category has fewer than three priced peers, the
+  median falls back to the whole market's and the page says so; a one-peer median is not a median.
+- **The sensitivity.** What the value becomes at the category's 25th and 75th premium — the same band
+  the board draws behind each row.
+- **The driver.** The one factor that most changes this value relative to the rest of the board: each of
+  the week, the age and the peer multiple is scored by how far the row sits from the board's median in
+  units of that factor's own spread, and the winner prints the move to its own ceiling (a +150% week, a
+  four-year record, or the 75th-percentile premium) with the percentage it would add or take away.
+
+All three are computed in `lib/model.ts` and written into `board.json`, so the page renders numbers it
+can check rather than deriving them: 178 rows recompute exactly.
+
 ## The board and its subjects
 
 All 40 house-watchlist protocols, plus the 138 pre-token protocols below the $50M floor with the most

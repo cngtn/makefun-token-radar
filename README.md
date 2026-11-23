@@ -46,9 +46,13 @@ typical error is the factor a prediction is out by:
 The curve is the term the record supports; the premium helps a little; the week and the age are kept at
 declared weights inside the noise, and the dashboard says so on its Method tab and in its source.
 
-## Odds and verdicts on every row
+## Peer evidence, odds and verdicts on every row
 
-Each row carries a **base rate** from the record — of the protocols in its category and size band
+Each row names its two or three nearest priced peers by TVL — ticker, TVL and their own `mcap / TVL` —
+prices it at the peers' median premium over the size curve, prints the value at that median and at the
+category's 25th–75th premium, and names the one factor that would move it most with the move priced in.
+
+It also carries a **base rate** from the record — of the protocols in its category and size band
 tracked two years or more, the share that record a token, with the k of n printed — and a **costed
 verdict**: expected net value per hour of attention and per dollar at risk, after the plan's gas and the
 carry on locked capital, at the base rate and an assumed 0.001% share of the claimed value. Both

@@ -68,6 +68,14 @@ verdict multiplies that rate by an assumed 0.001% share of the claimed value per
 subtracts the plan's gas and the carry on locked capital, and divides by the hours the plan asks for.
 Both assumptions are printed beside the number, and the verdict is linear in the share.
 
+## Comparables on every row
+
+Each row names its two or three nearest priced peers by TVL, with their ticker, their TVL and their own
+`mcap / TVL`, and prices the row at the peers' median **premium over the curve** — a raw multiple is
+only comparable at the same size, which is the whole reason the curve exists. A line says what the
+value would be at that median and at the category's 25th to 75th premium; another names the one factor
+— the week, the age or the peer multiple — that would move the value most, with the move priced in.
+
 ## What the model does not do
 
 The snapshot is sealed at its fetch date, so nothing on the page is newer. Many rows rest on fewer than

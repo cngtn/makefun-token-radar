@@ -265,20 +265,6 @@
     return Math.max(0, Math.min(100, ((mid - lo) / (hi - lo || 1)) * 100));
   }
 
-  function whySentence(row) {
-    var f = row.factors;
-    var growth = row.change_7d == null
-      ? 'no seven-day reading is recorded, so momentum stays neutral'
-      : 'the week moved ' + pct(row.change_7d) + ', which is ' + f.momentum.toFixed(2) + '× momentum';
-    var tenure = row.age_days == null
-      ? 'no listing date is recorded, so tenure sits at the neutral ' + F.tenure_unknown.toFixed(2) + '×'
-      : track(row.age_days) + ' without a token is ' + f.tenure.toFixed(2) + '× tenure';
-    var peers = f.peer_peers === 0
-      ? 'the category records no priced token, so its premium is the market\'s own'
-      : 'its category trades ' + factor(f.category_premium) + '× the curve on ' + gradeWord(f.peer_peers);
-    return usd(row.tvl_usd) + ' TVL sits on a size curve of ' + factor(f.size_multiple) + '×, ' + peers + '; ' + growth + ', and ' + tenure + '.';
-  }
-
   function stepParts(text) {
     var m = /^(.*?)\s*Cost: (.*?)\.\s*Time: (.*?)\.?$/.exec(text);
     if (!m) return { action: text, cost: '', time: '' };
@@ -288,11 +274,9 @@
   function verdictSentence(row) {
     var v = row.verdict;
     var o = row.odds;
-    var sign = v.net_usd >= 0 ? '' : '-';
-    return 'At the base rate — ' + o.with_token + ' of ' + o.tracked + ' protocols in ' + o.label + ', tracked two years or more, record a token, ' +
-      Math.round(o.rate * 100) + '% — and an assumed ' + (v.alloc_share * 100).toFixed(3) + '% of the claimed value per qualifying wallet, the position expects $' +
-      group(Math.round(Math.abs(v.gross_usd))) + ' gross, less $' + Math.round(v.gas_usd) + ' of gas and $' + v.carry_usd.toFixed(2) +
-      ' of carry, over ' + v.hours + ' hours of attention and $' + v.capital_usd + ' at risk. The figure is linear in that assumed share, and the odds are a base rate, not a forecast.';
+    return 'Base rate ' + Math.round(o.rate * 100) + '% (' + o.with_token + ' of ' + o.tracked + ' in ' + o.label + ', tracked two years or more) and an assumed ' +
+      (v.alloc_share * 100).toFixed(3) + '% of the claimed value per wallet: $' + group(Math.round(Math.abs(v.gross_usd))) + ' gross, less $' + Math.round(v.gas_usd) +
+      ' of gas and $' + v.carry_usd.toFixed(2) + ' of carry, over ' + v.hours + ' hours and $' + v.capital_usd + ' at risk. Linear in the assumed share.';
   }
 
   function renderPlan(row) {
@@ -303,12 +287,12 @@
   }
 
   function renderPeers(row) {
-    var peers = row.peer_sample || [];
-    if (!peers.length) return '<p class="why">This category records no priced token, so its premium is the market\'s own.</p>';
-    return '<table class="peers"><thead><tr><th>Token-bearing protocol</th><th>Market cap</th><th>TVL</th><th>mcap / TVL</th><th>vs curve</th></tr></thead><tbody>' +
+    var peers = row.peer_evidence || [];
+    if (!peers.length) return '<p class="why">No priced peer in this category, so the multiple is the market\'s own.</p>';
+    return '<table class="peers"><thead><tr><th>Nearest priced peer</th><th>TVL</th><th>mcap / TVL</th></tr></thead><tbody>' +
       peers.map(function (p) {
-        return '<tr><td>' + esc(p.name) + '</td><td class="n">' + usd(p.mcap_usd) + '</td><td class="n">' + usd(p.tvl_usd) +
-          '</td><td class="n">' + mult(p.mult) + '</td><td class="n hi">' + factor(p.vs_size) + '×</td></tr>';
+        return '<tr><td>' + esc(p.symbol) + ' <span class="muted">' + esc(p.name.length > 24 ? p.name.slice(0, 23) + '…' : p.name) +
+          '</span></td><td class="n">' + usd(p.tvl_usd) + '</td><td class="n hi">' + mult(p.mult) + '</td></tr>';
       }).join('') + '</tbody></table>';
   }
 
@@ -344,7 +328,6 @@
         '</div>' +
         '<div class="equation">' + usd(row.tvl_usd) + ' × ' + f.size_multiple.toFixed(4) + ' × ' + f.category_premium.toFixed(4) + ' × ' +
           f.momentum.toFixed(4) + ' × ' + f.tenure.toFixed(4) + ' = <b>' + exact(row.implied_value_usd) + '</b></div>' +
-        '<p class="why">' + esc(whySentence(row)) + '</p>' +
 
         '<h3>The verdict, costed in money and time</h3>' +
         '<div class="verdict">' +
@@ -355,9 +338,14 @@
         '</div>' +
         '<p class="why">' + esc(verdictSentence(row)) + '</p>' +
 
-        '<h3>Peers the market already prices</h3>' +
+        '<p class="why"><b>What would move it most:</b> ' + esc(row.driver.name) + ' — ' + esc(row.driver.detail) + ', ' +
+          (row.driver.change_pct >= 0 ? '+' : '-') + Math.abs(row.driver.change_pct).toFixed(0) + '% on the value.</p>' +
+        '<h3>Comparables behind the multiple</h3>' +
         renderPeers(row) +
-        '<p class="why">Every token-bearing protocol is one reading of mcap over TVL, and the column on the right is that reading against the size curve. A category\'s premium is the median of those, shrunk toward the market\'s own, so one odd peer cannot set a value.</p>' +
+        '<p class="why">Peers trade at <b>' + factor(row.peer_stats.median) + '× the curve</b> (' +
+          (row.peer_stats.basis === 'category' ? 'median of ' + gradeWord(row.peer_stats.peers) : 'market median; this category has ' + gradeWord(row.peer_stats.peers)) +
+          ') → <b>' + usd(row.peer_stats.median_usd) + '</b>; at the category\'s 25th–75th premium, <b>' + usd(row.implied_low_usd) + '</b> to <b>' +
+          usd(row.implied_high_usd) + '</b>. The model prices it at ' + factor(f.category_premium) + '×.</p>' +
       '</div><div class="col">' +
         '<h3>Farm plan: derived from this protocol\'s own record</h3>' +
         renderPlan(row) +
