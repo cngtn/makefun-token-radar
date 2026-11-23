@@ -317,8 +317,8 @@
           '<div class="factor ' + (f.momentum >= 1 ? 'good' : 'bad') + '"><span>Momentum</span><b>' + f.momentum.toFixed(2) + '×</b><small>' + pct(row.change_7d) + ' this week</small></div>' +
           '<div class="factor"><span>Tenure</span><b>' + f.tenure.toFixed(2) + '×</b><small>' + esc(track(row.age_days)) + ' without a token</small></div>' +
         '</div>' +
-        '<div class="equation">' + usd(row.tvl_usd) + ' × ' + factor(f.size_multiple) + ' × ' + factor(f.category_premium) + ' × ' +
-          f.momentum.toFixed(3) + ' × ' + f.tenure.toFixed(3) + ' = <b>' + exact(row.implied_value_usd) + '</b></div>' +
+        '<div class="equation">' + usd(row.tvl_usd) + ' × ' + f.size_multiple.toFixed(4) + ' × ' + f.category_premium.toFixed(4) + ' × ' +
+          f.momentum.toFixed(4) + ' × ' + f.tenure.toFixed(4) + ' = <b>' + exact(row.implied_value_usd) + '</b></div>' +
         '<p class="why">' + esc(whySentence(row)) + '</p>' +
 
         '<h3>Peers the market already prices</h3>' +
