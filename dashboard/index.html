@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Radar: pre-token protocols ranked by the value a token would claim</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<a class="skip" href="#board">Skip to the board</a>
+
+<header class="masthead">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    <div class="brand-text">
+      <h1>Token Radar</h1>
+      <p>Protocols whose record carries no token, ranked by the value a token would claim.</p>
+    </div>
+  </div>
+  <dl class="facts" id="facts"></dl>
+</header>
+
+<section class="formula" id="formula" aria-label="The value model"></section>
+
+<nav class="tabs" id="tabs" aria-label="Views">
+  <button type="button" data-tab="board" class="on" aria-pressed="true">Board</button>
+  <button type="button" data-tab="live" aria-pressed="false">Token trades</button>
+  <button type="button" data-tab="method" aria-pressed="false">Method</button>
+  <span class="tabs-note" id="tabs-note"></span>
+</nav>
+
+<main id="board" tabindex="-1">
+  <section class="controls" id="controls" aria-label="Filter and sort the board">
+    <label class="search">
+      <span>Find</span>
+      <input id="q" type="search" placeholder="Protocol, category or chain" autocomplete="off" spellcheck="false">
+    </label>
+    <label><span>Category</span><select id="cat"></select></label>
+    <label><span>Evidence</span><select id="ev">
+      <option value="*">Any peer count</option>
+      <option value="deep">Deep, 10+ peers</option>
+      <option value="fair">Fair, 5 to 9 peers</option>
+      <option value="thin">Thin, under 5 peers</option>
+    </select></label>
+    <label><span>Show</span><select id="tier">
+      <option value="*">Every row</option>
+      <option value="watchlist">House watchlist only</option>
+      <option value="below-floor">Below the floor only</option>
+    </select></label>
+    <label><span>Sort</span><select id="sort">
+      <option value="rank">Implied value, best first</option>
+      <option value="tvl">TVL, largest first</option>
+      <option value="growth">Seven-day change, hottest first</option>
+      <option value="age">Time without a token, longest first</option>
+      <option value="peer">Peer multiple, highest first</option>
+    </select></label>
+    <button type="button" class="ghost" id="reset">Reset</button>
+  </section>
+
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+
+  <div class="table" id="table">
+    <div class="thead" id="thead"></div>
+    <div class="tbody" id="tbody"></div>
+  </div>
+
+  <div class="empty" id="empty" hidden></div>
+
+  <section class="panel" id="live" hidden aria-label="Protocols whose token already trades"></section>
+  <section class="panel" id="method" hidden aria-label="How the model works"></section>
+</main>
+
+<aside class="drawer" id="drawer" hidden aria-label="Protocol detail"></aside>
+<div class="scrim" id="scrim" hidden></div>
+
+<footer class="foot" id="foot"></footer>
+
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
