@@ -78,17 +78,10 @@ value would be at that median and at the category's 25th to 75th premium; anothe
 
 ## What the model does not do
 
-The snapshot is sealed at its fetch date, so nothing on the page is newer. Many rows rest on fewer than
-three priced peers and take the market's premium; only a third of the token-bearing protocols carry a
-market cap, so the curve rests on those; the odds are a cohort base rate, not a forecast, and a list of
-surviving protocols is survivorship-biased; no row predicts a launch or its date.
+The page prints its own limits: a sealed snapshot, most rows on under three priced peers, a curve that
+rests on the third of token-bearing protocols that carry a market cap, a held-out error it states, odds
+that are a base rate from a list of survivors, and no prediction of a launch or its date.
 
-## Where the numbers come from, and how to check them
+## Where the numbers come from
 
-- `../data.js` is written by `main.ts` from `/input/snapshot.json`: the rows with their factors, the
-  token-bearing records, the fitted curve, the validation table and the verdicts.
-- `board-preview.json` here is the generated build manifest: the fit, the premiums, the top of the board.
-- `app.js` recomputes every row from its rounded factors in the same order the model took them, and the
-  footer reports how many it reproduced — all of them on this snapshot. The number on the screen is the
-  number in `board.json`.
-- The page needs no network: two classic scripts, one stylesheet, no fonts, no images, no fetch.
+`../data.js` is written by `main.ts` from `/input/snapshot.json`; `board-preview.json` is the build manifest; `app.js` recomputes every row from its rounded factors and the footer reports how many it reproduced. No network, no fonts, no images.

@@ -182,6 +182,49 @@ the number:
 All three are computed in `lib/model.ts` and written into `board.json`, so the page renders numbers it
 can check rather than deriving them: 178 rows recompute exactly.
 
+## The page, audited rather than guessed
+
+The page is checked numerically by `tools/audit-page.cjs`, which drives the rendered document in
+Chromium at 1440×900 on all five views and asserts, for every element on it:
+
+| assertion | board | detail | filtered | method | live |
+| --- | --- | --- | --- | --- | --- |
+| no horizontal overflow | pass | pass | pass | pass | pass |
+| no text clipped by its container | pass | pass | pass | pass | pass |
+| no overlapping non-nested blocks | pass | pass | pass | pass | pass |
+| table cells centred in their row (≤ 3px) | pass | pass | pass | pass | pass |
+| every margin and padding on the 4px grid | pass | pass | pass | pass | pass |
+| one type scale, every size a token | pass | pass | pass | pass | pass |
+| WCAG AA: body ≥ 4.5, large ≥ 3 | pass | pass | pass | pass | pass |
+| the fold lands on a row edge | pass (10 rows, 8px gap) | pass | pass (9) | pass | pass |
+| nothing important below y=900 | pass | pass | — | — | — |
+
+The typography is one modular scale on a 1.2 ratio — 10, 12, 14, 17, 20, 24, 29, 35 px — and every
+margin and padding is one of 4, 8, 12, 16, 24, 32 px, so the cloud of sizes and half-pixel gaps a page
+picks up by accident cannot survive. Contrast is measured on the composited colour, not the declared
+one, so a translucent pill's text is checked against what is actually behind it. The audit also fails on
+a console error, which is how a `NaN` in the SVG's first draft was caught before it reached a
+screenshot.
+
+**The board is designed for the fold.** The masthead, the formula strip, the tabs, the controls, the
+filter status, the one-line integrity strip and the table head take the first 408px; ten ranked rows
+follow in 45px steps, and the eleventh row begins 8px below the fold. The cover image therefore shows a
+real ranking — ten protocols with rank, TVL, week, tenure, multiple, costed verdict and implied value —
+and nothing is cut mid-row.
+
+**Every view is a real link.** State is `#/key/value/...`: `#/p/onre` opens a protocol,
+`#/cat/CDP/sort/tvl` is a filtered, sorted board. Detail opens push a history entry and close pops it, so
+back and forward walk the reader's steps; a deep link opens on load and Escape closes it without leaving
+the page. A filter or sort survives a reload because it lives in the address. Rows use a roving
+`tabindex`, arrow keys move between them, Enter opens, and the focused row carries a 2px mint outline
+(`:focus-visible`), so the board is navigable from the keyboard.
+
+**One visual earns its place.** The method view draws the fit: every priced protocol as a grey point
+(TVL against its own `mcap/TVL`), every board row as a mint point at the multiple it is priced with, and
+the fitted curve as a blue line through them — 306 circles and a 25-segment polyline, built as SVG from
+the data with no library and no image file. It is the one thing a reader cannot get from the table: the
+model is fitted, and the rows sit where the curve says.
+
 ## The board and its subjects
 
 All 40 house-watchlist protocols, plus the 138 pre-token protocols below the $50M floor with the most

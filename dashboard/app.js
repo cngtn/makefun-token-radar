@@ -58,27 +58,57 @@
 
   /* ------------------------------------------------------------------ the address */
 
+  // One canonical form: #/key/value/key/value, so every protocol has a real link and the whole state
+  // survives a reload. Changing state pushes an entry, so back and forward walk the reader's steps.
+  var POPPING = false;
+  var PUSHED_DRAWER = false;
+
   function readHash() {
-    var p = new URLSearchParams((location.hash || '').replace(/^#/, ''));
-    state.tab = p.get('tab') || 'board';
-    state.q = p.get('q') || '';
-    state.cat = p.get('cat') || '*';
-    state.ev = p.get('ev') || '*';
-    state.tier = p.get('tier') || '*';
-    state.sort = p.get('sort') || 'rank';
-    state.slug = p.get('p') || null;
+    var parts = (location.hash || '').replace(/^#\/?/, '').split('/').filter(Boolean);
+    var p = {};
+    for (var i = 0; i + 1 < parts.length; i += 2) {
+      try { p[parts[i]] = decodeURIComponent(parts[i + 1]); } catch (e) { p[parts[i]] = parts[i + 1]; }
+    }
+    state.tab = p.tab || 'board';
+    state.q = p.q || '';
+    state.cat = p.cat || '*';
+    state.ev = p.ev || '*';
+    state.tier = p.tier || '*';
+    state.sort = p.sort || 'rank';
+    state.slug = p.p || null;
   }
-  function writeHash() {
-    var p = new URLSearchParams();
-    if (state.tab !== 'board') p.set('tab', state.tab);
-    if (state.q) p.set('q', state.q);
-    if (state.cat !== '*') p.set('cat', state.cat);
-    if (state.ev !== '*') p.set('ev', state.ev);
-    if (state.tier !== '*') p.set('tier', state.tier);
-    if (state.sort !== 'rank') p.set('sort', state.sort);
-    if (state.slug) p.set('p', state.slug);
-    var next = p.toString();
-    history.replaceState(null, '', location.pathname + location.search + (next ? '#' + next : ''));
+
+  function hashFor() {
+    var parts = [];
+    if (state.tab !== 'board') parts.push('tab', state.tab);
+    if (state.q) parts.push('q', encodeURIComponent(state.q));
+    if (state.cat !== '*') parts.push('cat', encodeURIComponent(state.cat));
+    if (state.ev !== '*') parts.push('ev', state.ev);
+    if (state.tier !== '*') parts.push('tier', state.tier);
+    if (state.sort !== 'rank') parts.push('sort', state.sort);
+    if (state.slug) parts.push('p', encodeURIComponent(state.slug));
+    return parts.length ? '#/' + parts.join('/') : location.pathname + location.search;
+  }
+
+  function navigate(push) {
+    var next = hashFor();
+    var here = location.pathname + location.search + location.hash;
+    if (next === here) return;
+    if (push) history.pushState(null, '', next);
+    else history.replaceState(null, '', next);
+  }
+
+  function restore() {
+    if (POPPING) return;
+    PUSHED_DRAWER = false;
+    POPPING = true;
+    var wasOpen = state.slug !== null;
+    readHash();
+    renderControls();
+    showTab(state.tab);
+    if (state.slug && state.slug !== null) openDetail(state.slug, true);
+    else if (wasOpen) closeDetail(true);
+    POPPING = false;
   }
 
   /* ------------------------------------------------------------------ filtering and sorting */
@@ -232,7 +262,7 @@
     var g = row.change_7d == null ? 'flat' : row.change_7d > 0.05 ? 'up' : row.change_7d < -0.05 ? 'down' : 'flat';
     var seg = place(row.implied_low_usd, row.implied_high_usd);
     var pin = place(row.implied_value_usd, row.implied_value_usd);
-    return '<div class="row" role="row" tabindex="0" data-slug="' + esc(row.slug) + '">' +
+    return '<div class="row" role="row" tabindex="-1" data-slug="' + esc(row.slug) + '">' +
       '<span class="rank" role="cell">' + row.rank + '</span>' +
       '<div class="who" role="cell"><b>' + esc(row.name) + '</b><small>' + esc(catLabel(row)) + ' · ' + esc(chainLine(row.chains, 2)) +
         (row.tier === 'below-floor' ? '<span class="tag">below floor</span>' : '') + '</small></div>' +
@@ -254,6 +284,8 @@
     rows.forEach(function (r) { min = Math.min(min, r.implied_low_usd); max = Math.max(max, r.implied_high_usd); });
     var place = band({ min: Math.max(1, min), max: Math.max(2, max) });
     $('tbody').innerHTML = rows.map(function (r) { return renderRow(r, place); }).join('');
+    var first = $('tbody').querySelector('.row');
+    if (first) first.setAttribute('tabindex', '0');
   }
 
   /* ------------------------------------------------------------------ the detail view */
@@ -296,7 +328,7 @@
       }).join('') + '</tbody></table>';
   }
 
-  function openDetail(slug) {
+  function openDetail(slug, silent) {
     var row = null;
     for (var i = 0; i < R.rows.length; i++) if (R.rows[i].slug === slug) { row = R.rows[i]; break; }
     if (!row) { closeDetail(); return; }
@@ -357,17 +389,19 @@
     draw.hidden = false;
     $('scrim').hidden = false;
     body.classList.add('drawing');
-    $('drawer-close').addEventListener('click', closeDetail);
+    $('drawer-close').addEventListener('click', function () { closeDetail(); });
     draw.scrollTop = 0;
-    writeHash();
+    if (!silent) { navigate(true); PUSHED_DRAWER = true; }
   }
 
-  function closeDetail() {
+  function closeDetail(fromPop) {
+    var was = state.slug !== null;
     state.slug = null;
     $('drawer').hidden = true;
     $('scrim').hidden = true;
     body.classList.remove('drawing');
-    writeHash();
+    if (!fromPop && was && PUSHED_DRAWER) { PUSHED_DRAWER = false; history.back(); }
+    else { PUSHED_DRAWER = false; navigate(false); }
   }
 
   /* ------------------------------------------------------------------ token trades and method */
@@ -388,47 +422,60 @@
       }).join('') + '</div>';
   }
 
+  // The scatter: every priced protocol's own multiple against its TVL, with the fitted curve through
+  // them, and the board's rows in mint. Drawn as SVG from the data, no library, no image file.
+  function plotSvg() {
+    var pts = R.priced || [];
+    var rows = R.rows;
+    var W = 660, H = 224, L = 44, Rt = 12, T = 12, B = 24;
+    var xs = pts.map(function (p) { return Math.log10(p.tvl); }).concat(rows.map(function (r) { return Math.log10(r.tvl_usd); }));
+    var ys = pts.map(function (p) { return Math.log10(p.mult); }).concat(rows.map(function (r) { return Math.log10(r.factors.peer_multiple); }));
+    var x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
+    var y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+    var px = function (t) { return (L + ((Math.log10(t) - x0) / (x1 - x0)) * (W - L - Rt)).toFixed(1); };
+    var py = function (m) { return (T + (1 - (Math.log10(m) - y0) / (y1 - y0)) * (H - T - B)).toFixed(1); };
+    var curve = [];
+    for (var i = 0; i <= 24; i += 1) {
+      var lx = x0 + ((x1 - x0) * i) / 24;
+      curve.push(px(Math.pow(10, lx)) + ',' + py(Math.exp(F.fit.a + F.fit.b * lx * Math.LN10)));
+    }
+    var dots = pts.map(function (p) { return '<circle cx="' + px(p.tvl) + '" cy="' + py(p.mult) + '" r="1.6" fill="#8092a5" opacity="0.45"/>'; }).join('');
+    var mine = rows.map(function (r) { return '<circle cx="' + px(r.tvl_usd) + '" cy="' + py(r.factors.peer_multiple) + '" r="2" fill="#3fe0a8" opacity="0.8"/>'; }).join('');
+    var xTicks = [[1e7, '$10M'], [1e8, '$100M'], [1e9, '$1B'], [1e10, '$10B']].filter(function (t) { return Math.log10(t[0]) >= x0 && Math.log10(t[0]) <= x1; })
+      .map(function (t) { return '<text x="' + px(t[0]) + '" y="' + (H - 8) + '" fill="#8092a5" font-size="10" text-anchor="middle">' + t[1] + '</text>'; }).join('');
+    var yTicks = [0.01, 0.1, 1, 10, 100].filter(function (v) { return Math.log10(v) >= y0 && Math.log10(v) <= y1; })
+      .map(function (v) { return '<text x="' + (L - 6) + '" y="' + py(v) + '" fill="#8092a5" font-size="10" text-anchor="end" dominant-baseline="middle">' + (v >= 1 ? v + 'x' : v + 'x') + '</text>'; }).join('');
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Every priced protocol as a point, TVL against mcap over TVL, with the fitted curve">' +
+      '<rect x="' + L + '" y="' + T + '" width="' + (W - L - Rt) + '" height="' + (H - T - B) + '" fill="none" stroke="#22313f"/>' +
+      dots + mine +
+      '<polyline points="' + curve.join(' ') + '" fill="none" stroke="#8fb8ff" stroke-width="1.5" opacity="0.9"/>' +
+      xTicks + yTicks + '</svg>';
+  }
+
   function renderMethod() {
-    var cats = CATS.slice(0, 8);
     var V = R.validation;
     var last = V.stages[V.stages.length - 1];
-    var at = function (tvl) { return factor(Math.exp(F.fit.a + F.fit.b * Math.log(tvl))); };
+    var at = function (t) { return factor(Math.exp(F.fit.a + F.fit.b * Math.log(t))); };
     $('method').innerHTML =
-      '<div class="panel-head"><div><h2>How the implied value is made</h2>' +
-      '<p>One formula scores all ' + R.meta.board_size + ' rows, no name is special-cased, and every term was put to a leave-one-out test on the snapshot\'s own priced protocols.</p></div></div>' +
+      '<div class="panel-head"><h2>How the implied value is made</h2>' +
+      '<p>One formula scores all ' + R.meta.board_size + ' rows, no name is special-cased, and every term was put to a leave-one-out test on the snapshot\'s own priced protocols.</p></div>' +
       '<div class="cards">' +
-        '<div class="card wide"><h3>The formula, and where each part comes from</h3>' +
-          '<p><code>implied = TVL × peer × momentum × tenure</code>, with <code>peer = size curve(TVL) × category premium × ' + factor(R.model.calibration) + '×</code> calibration.</p>' +
-          '<p><b>Size curve.</b> ' + F.fit.n + ' protocols record a market cap and a TVL, and each is one reading of mcap over TVL. Regressing ln(mcap/TVL) on ln(TVL) gives a slope of ' + F.fit.b.toFixed(3) + ' — the market pays less per dollar of TVL as TVL grows — so a dollar of TVL is ' + at(5e7) + '× at $50M and ' + at(1e9) + '× at $1B.</p>' +
-          '<p><b>Category premium.</b> Each priced protocol\'s residual over that curve, by category, shrunk toward the market\'s own with a weight of ' + F.peer_shrink + ' peers and capped at ' + F.premium_band + '×. A weight of 5 made the held-out error worse; ' + F.peer_shrink + ' is where the term stops costing anything.</p>' +
-          '<p><b>The week</b> enters at weight ' + F.growth_weight + ', clipped to ' + F.growth_clip_low + ' to +' + F.growth_clip_high + '%; at the 0.45 the first version used the held-out test got worse, so it is small. <b>The age</b> ramps ' + F.tenure_low + ' to ' + F.tenure_high + '× over ' + group(F.tenure_days) + ' days with no token, and an unrecorded age takes ' + F.tenure_unknown + '×.</p></div>' +
-        '<div class="card wide"><h3>Held-out test: every term kept or dropped on the record</h3>' +
-          '<p>Leave-one-out: refit on ' + (V.n - 1) + ' priced protocols and score the one held out, ' + V.n + ' times. The typical error is the factor a prediction is out by, at the median.</p>' +
-          '<table class="grid-table"><thead><tr><th>Model</th><th>Calibration</th><th>Typical error</th><th>90th</th></tr></thead><tbody>' +
-          V.stages.map(function (s) {
-            return '<tr><td>' + esc(s.name) + '</td><td class="n">' + s.calibration.toFixed(3) + '</td><td class="n">' + s.error.toFixed(2) + '×</td><td class="n">' + s.p90.toFixed(1) + '×</td></tr>';
-          }).join('') +
-          '</tbody></table>' +
-          '<p>The curve is the term the record supports: ' + V.stages[1].error.toFixed(2) + '× against ' + V.stages[0].error.toFixed(2) + '× for a flat multiple. Turning the week and the age off moves it to ' + V.stages[2].error.toFixed(2) + '×, inside the noise of ' + V.n + ' records, so those two are declared terms at a weight the noise can carry rather than fitted ones. Every row prints its own band at the category\'s 25th and 75th premium.</p></div>' +
+        '<div class="card wide"><h3>The fit, and the rows it prices</h3>' +
+          '<p><code>implied = TVL × peer × momentum × tenure</code>, with <code>peer = size curve(TVL) × category premium × ' + factor(R.model.calibration) + '×</code> calibration. The curve is a least-squares fit of <code>ln(mcap/TVL)</code> on <code>ln(TVL)</code> over the ' + F.fit.n + ' protocols that record both: slope ' + F.fit.b.toFixed(3) + ', so a dollar of TVL is ' + at(5e7) + '× at $50M and ' + at(1e9) + '× at $1B.</p>' +
+          '<figure class="plot">' + plotSvg() +
+          '<figcaption><b>Grey</b> the ' + F.fit.n + ' priced protocols; <b>mint</b> the ' + R.meta.board_size + ' board rows at the multiple they are priced with; <b>blue</b> the fitted curve. The rows sit on the curve because that is where their multiple comes from.</figcaption></figure></div>' +
         '<div class="card"><h3>Read off the snapshot</h3><div class="spec">' +
-          'priced tokens <span>' + F.fit.n + '</span><br>' +
-          'curve slope <span>' + F.fit.b.toFixed(3) + '</span><br>' +
-          'at $50M <span>' + at(5e7) + '×</span><br>' +
-          'at $1B <span>' + at(1e9) + '×</span><br>' +
-          'calibration <span>' + factor(R.model.calibration) + '×</span><br>' +
-          'premium shrink <span>' + F.peer_shrink + '</span><br>' +
-          'week weight <span>' + F.growth_weight + '</span><br>' +
-          'tenure ramp <span>' + F.tenure_low + ' to ' + F.tenure_high + '×</span><br>' +
-          'held-out error <span>' + last.error.toFixed(2) + '×</span></div></div>' +
-        '<div class="card"><h3>The split the board keeps</h3>' +
-          '<p><b>' + R.meta.token_bearing + '</b> of ' + R.meta.protocols + ' protocols record a token and are never scored; <b>' + R.meta.pre_token + '</b> record none, and ' + R.meta.watchlist + ' clear the $' + Math.round(R.meta.floor_usd / 1e6) + 'M floor. The board adds the ' + R.meta.below_floor + ' pre-token protocols below it, after the same product rule.</p></div>' +
-        '<div class="card wide"><h3>Odds and verdicts</h3>' +
-          '<p>Each row carries a base rate from the record: of the protocols in its category and size band tracked two years or more, the share that record a token, with the k of n printed in the detail view. The verdict multiplies that rate by an assumed ' + (R.model.alloc_share * 100).toFixed(3) + '% share of the claimed value per qualifying wallet, subtracts the plan\'s gas and the carry on locked capital, and divides by the hours the plan asks for. Both assumptions are printed on the row, and the verdict is linear in the share.</p></div>' +
-        '<div class="card wide"><h3>Categories with the most priced peers</h3>' +
-          '<table class="grid-table"><thead><tr><th>Category</th><th>Peers</th><th>Premium</th><th>25th</th><th>75th</th></tr></thead><tbody>' +
-          cats.map(function (c) {
-            return '<tr><td>' + esc(c.name) + '</td><td class="n">' + c.peers + '</td><td class="n">' + factor(c.premium) + '×</td><td class="n">' + factor(c.p25) + '×</td><td class="n">' + factor(c.p75) + '×</td></tr>';
-          }).join('') + '</tbody></table></div>' +
+          'priced tokens <span>' + F.fit.n + '</span><br>curve slope <span>' + F.fit.b.toFixed(3) + '</span><br>' +
+          'calibration <span>' + factor(R.model.calibration) + '×</span><br>premium shrink <span>' + F.peer_shrink + '</span><br>' +
+          'week weight <span>' + F.growth_weight + '</span><br>tenure ramp <span>' + F.tenure_low + ' to ' + F.tenure_high + '×</span><br>' +
+          'week <span>' + F.growth_clip_low + ' to +' + F.growth_clip_high + '%</span></div></div>' +
+        '<div class="card wide"><h3>Held-out test: every term kept or dropped on the record</h3>' +
+          '<p>Leave-one-out: refit on ' + (V.n - 1) + ' priced protocols and score the one held out, ' + V.n + ' times. Typical error is the factor a prediction is out by, at the median.</p>' +
+          '<table class="grid-table"><thead><tr><th>Model</th><th>Calibration</th><th>Typical error</th><th>90th</th></tr></thead><tbody>' +
+          V.stages.map(function (st) {
+            return '<tr><td>' + esc(st.name) + '</td><td class="n">' + st.calibration.toFixed(3) + '</td><td class="n">' + st.error.toFixed(2) + '×</td><td class="n">' + st.p90.toFixed(1) + '×</td></tr>';
+          }).join('') + '</tbody></table>' +
+          '<p>The curve is the term the record supports; turning the week and the age off moves the error to ' + V.stages[2].error.toFixed(2) + '×, inside the noise of ' + V.n + ' records, so those two are declared terms at a weight the noise can carry rather than fitted ones.</p></div>' +
       '</div>';
   }
 
@@ -483,7 +530,7 @@
   function rerender() {
     renderControls();
     renderBoard();
-    writeHash();
+    navigate(false);
   }
 
   function bind() {
@@ -510,27 +557,30 @@
       if (row) openDetail(row.getAttribute('data-slug'));
     });
     $('tbody').addEventListener('keydown', function (e) {
-      if (e.key !== 'Enter' && e.key !== ' ') return;
       var row = e.target.closest ? e.target.closest('.row') : null;
-      if (row) { e.preventDefault(); openDetail(row.getAttribute('data-slug')); }
+      if (!row) return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(row.getAttribute('data-slug')); return; }
+      var step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+      if (!step) return;
+      e.preventDefault();
+      var list = [].slice.call($('tbody').querySelectorAll('.row'));
+      var next = list[Math.max(0, Math.min(list.length - 1, list.indexOf(row) + step))];
+      list.forEach(function (r) { r.setAttribute('tabindex', '-1'); });
+      next.setAttribute('tabindex', '0');
+      next.focus();
     });
 
     $('tabs').addEventListener('click', function (e) {
       var b = e.target.closest ? e.target.closest('button[data-tab]') : null;
-      if (b) { showTab(b.getAttribute('data-tab')); writeHash(); }
+      if (b) { showTab(b.getAttribute('data-tab')); renderControls(); navigate(true); }
     });
 
-    $('scrim').addEventListener('click', closeDetail);
+    $('scrim').addEventListener('click', function () { closeDetail(); });
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && state.slug) closeDetail();
     });
-    window.addEventListener('hashchange', function () {
-      var slug = state.slug;
-      readHash();
-      if (state.slug && state.slug !== slug) openDetail(state.slug);
-      else if (!state.slug && $('drawer').hidden === false) closeDetail();
-      showTab(state.tab);
-    });
+    window.addEventListener('popstate', restore);
+    window.addEventListener('hashchange', restore);
   }
 
   /* ------------------------------------------------------------------ start */
@@ -546,5 +596,5 @@
   renderFoot();
   showTab(state.tab);
   bind();
-  if (state.slug) openDetail(state.slug);
+  if (state.slug) openDetail(state.slug, true);
 })();

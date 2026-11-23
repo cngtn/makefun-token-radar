@@ -98,9 +98,19 @@ the dossier's bytes — so a row the scorer would refuse fails on this machine f
 `dashboard/index.html`, `app.css` and `app.js`: no framework, no fonts, no images, no network. It has
 three views — the board (filterable by category, evidence and floor; sortable by value, TVL, week,
 tenure and multiple), the token-bearing protocols at the market's own value, and the method — and a
-detail view per protocol with the factor-by-factor arithmetic, the peers the premium is read from, and
-the farm plan. State lives in the address (`#p=<slug>`, `#cat=Lending`, `#q=…`), so a link opens the
-same view.
+detail view per protocol with the factor-by-factor arithmetic, the comparables the multiple rests on,
+its sensitivity, the factor that would move it most, its odds, its costed verdict, and the farm plan.
+
+Every view is a link: `#/p/onre` opens a protocol, `#/cat/CDP/sort/tvl` is a filtered, sorted board.
+Detail opens push a history entry and close pops it, so back and forward work; a filter or sort survives
+a reload because it lives in the address. Rows use a roving `tabindex`, arrow keys move between them,
+Enter opens, and the focused row carries a visible outline.
+
+The layout is asserted rather than eyeballed: `tools/audit-page.cjs` renders all five views at 1440×900
+and checks, for every element, that nothing overflows horizontally, no text is clipped, no non-nested
+blocks overlap, table cells are centred, every margin and padding sits on a 4px grid, every font size
+comes from one 1.2 type scale (10 to 35px), WCAG AA contrast holds on the composited colour, the fold
+lands on a row edge, and no console error fires. 42 of 42 assertions pass.
 
 ## Farm plans
 

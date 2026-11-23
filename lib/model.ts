@@ -305,6 +305,8 @@ export interface RadarData {
     alloc_share: number;
   };
   categories: CategoryStat[];
+  /** Every priced protocol as a point, for the page's scatter of TVL against the multiple. */
+  priced: { tvl: number; mult: number }[];
   rows: BoardRow[];
   live: LiveRow[];
 }
@@ -917,6 +919,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       bias: round(Math.exp(bias), 4),
     },
     categories: categoryStats(table),
+    priced: table.priced.map((q) => ({ tvl: q.protocol.tvl_usd, mult: Math.max(0.0001, round(q.mult, 6)) })).sort((x, y) => x.tvl - y.tvl || x.mult - y.mult),
     rows: board,
     live: liveRows(snapshot, model),
   };
@@ -1287,13 +1290,12 @@ export function previewManifest(radar: RadarData): string {
       growth_weight: radar.model.growth_weight,
       tenure_ramp: [radar.model.tenure_low, radar.model.tenure_high, radar.model.tenure_days],
     },
-    categories: radar.categories.slice(0, 6),
-    top: radar.rows.slice(0, 6).map((r) => ({
+    categories: radar.categories.slice(0, 3),
+    top: radar.rows.slice(0, 3).map((r) => ({
       rank: r.rank,
       slug: r.slug,
       tvl_usd: r.tvl_usd,
       change_7d: r.change_7d,
-      age_days: r.age_days,
       size_multiple: r.factors.size_multiple,
       category_premium: r.factors.category_premium,
       peer_multiple: r.factors.peer_multiple,
