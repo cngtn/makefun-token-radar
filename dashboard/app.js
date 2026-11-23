@@ -127,10 +127,10 @@
   function renderFacts() {
     var covered = R.rows.filter(function (r) { return r.tier === 'watchlist'; }).length;
     var items = [
-      ['Protocols ranked', String(R.meta.board_size), R.meta.below_floor + ' below the $' + Math.round(R.meta.floor_usd / 1e6) + 'M floor'],
+      ['Protocols ranked', String(R.meta.board_size), R.meta.watchlist + ' on the watchlist, ' + R.meta.below_floor + ' below the floor'],
       ['Watchlist covered', covered + '/' + R.meta.watchlist, 'every slug the snapshot names'],
       ['Priced tokens', String(R.meta.with_mcap), 'the peer evidence, of ' + R.meta.token_bearing + ' with a token'],
-      ['TVL in scope', usd(R.meta.tvl_in_scope), 'records no token']
+      ['TVL in scope', usd(R.meta.tvl_in_scope), 'across the rows that record no token']
     ];
     $('facts').innerHTML = items.map(function (it) {
       return '<div><dt>' + esc(it[0]) + '</dt><dd>' + esc(it[1]) + '<small>' + esc(it[2]) + '</small></dd></div>';
@@ -179,7 +179,8 @@
     if (state.tier !== '*') chips.push('<span class="chip grey">' + esc(state.tier === 'watchlist' ? 'house watchlist' : 'below the floor') + '</span>');
     if (state.sort !== 'rank') chips.push('<span class="chip grey">sorted by ' + esc(state.sort === 'age' ? 'time without a token' : state.sort) + '</span>');
     var text = rows.length + ' of ' + R.rows.length + ' rows';
-    $('status').innerHTML = '<span>' + esc(text) + '</span>' + chips.join('');
+    $('status').innerHTML = '<span>Snapshot ' + esc(R.meta.as_of) + ' · ' + esc(text) + '</span>' + chips.join('') +
+      '<span class="aside">The ' + R.meta.token_bearing + ' protocols whose record carries a token are shown in Token trades, never scored.</span>';
     $('empty').hidden = rows.length > 0;
     $('empty').textContent = rows.length ? '' : 'No protocol matches that filter. Clear one and the board comes back.';
   }
@@ -312,7 +313,7 @@
         '<h3>The arithmetic, factor by factor</h3>' +
         '<div class="factors">' +
           '<div class="factor"><span>TVL</span><b>' + usd(row.tvl_usd) + '</b><small>' + esc(chainLine(row.chains, 2)) + '</small></div>' +
-          '<div class="factor"><span>Peer ×</span><b>' + mult(f.peer_multiple) + '</b><small>' + gradeWord(f.peer_peers) + ' at ' + mult(f.peer_median) + '</small></div>' +
+          '<div class="factor"><span>Peer ×</span><b>' + mult(f.peer_multiple) + '</b><small>' + gradeWord(f.peer_peers) + ' in ' + esc(catLabel(row)) + '</small></div>' +
           '<div class="factor ' + (f.momentum >= 1 ? 'good' : 'bad') + '"><span>Momentum</span><b>' + f.momentum.toFixed(2) + '×</b><small>' + pct(row.change_7d) + ' this week</small></div>' +
           '<div class="factor"><span>Tenure</span><b>' + f.tenure.toFixed(2) + '×</b><small>' + esc(track(row.age_days)) + ' without a token</small></div>' +
         '</div>' +
