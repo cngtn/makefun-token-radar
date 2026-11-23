@@ -6,91 +6,81 @@ The radar answers one question per protocol and only that question:
 > protocol be worth?
 
 It does not forecast that a token will be issued. The board is a valuation of a claim, with its
-arithmetic on the screen.
+arithmetic and its out-of-sample error on the screen.
 
-## One formula, two parts to the peer
+## The formula
 
 ```
 implied = TVL × peer × momentum(change_7d) × tenure(age)
 peer    = size curve(TVL) × category premium(category)
 ```
 
-### 1. The size curve — what the market pays at this size
+The **size curve** is fitted on every protocol in the snapshot that records both a market cap and a TVL.
+Each is one reading of `mcap / TVL`, and in this snapshot that ratio falls with size: 0.33× under $100M
+of TVL, 0.08× from $300M to $1B, 0.03× from $1B to $10B. A least-squares fit of `ln(ratio)` on `ln(TVL)`
+gives `ln(ratio) = 5.941 − 0.416·ln(TVL)`, so a dollar of TVL is worth 0.24× at $50M and 0.07× at $1B.
+The curve is then multiplied by one calibrated offset (about 1.07×) so that its average matches the
+market's; that offset is the only free scalar in the model.
 
-The snapshot carries protocols whose token already trades *and* a market cap. Each is one reading of
-`mcap / TVL`, and in this snapshot that ratio falls with size: a median of 0.33× under $100M of TVL,
-0.13× from $100M to $300M, 0.08× from $300M to $1B and 0.03× from $1B to $10B. A least-squares fit of
-`ln(ratio)` on `ln(TVL)` over the 128 priced protocols gives `ln(ratio) = 5.941 − 0.416·ln(TVL)`: the
-same dollar of TVL is worth 0.24× at $50M and 0.07× at $1B. Nothing here is typed in; the curve is the
-snapshot's own cross-section.
+The **category premium** is each priced protocol's residual over that curve, by category, shrunk toward
+the market's own with a weight of 20 peers and capped at 2.8×. A weight of 5 made the held-out error
+worse, so the categories move the multiple only a little.
 
-### 2. The category premium — how far a category sits above the curve
+**Momentum** enters at weight 0.15, clipped to −60% to +150%: at the 0.45 the first version used, the
+held-out test got worse. **Tenure** ramps 0.62× to 1.34× over four years without a token; an
+unrecorded age takes the neutral 0.98×.
 
-Every priced protocol sits some factor above or below the curve at its own size. A category's premium is
-the median of its own peers' factors over the curve, shrunk toward the market's own median with a weight
-of **k = 5** peers:
+## Held-out test
 
-```
-premium(c) = exp( (n·R_c + k·R_market) / (n + k) )      held inside 2.8× of the market's
-```
+Leave-one-out: the whole model is refitted on 127 priced protocols and scored on the one held out, 128
+times. Typical error is the factor a prediction is out by, at the median.
 
-Seven peers outweigh the market prior; one does not. The detail view prints both parts of the multiple
-and the priced protocols the premium was read from, each with its own multiple against the curve.
+| Model | Calibration | Typical error | 90th |
+| --- | --- | --- | --- |
+| a flat multiple | 1.000 | 4.79× | 24.7× |
+| + the size curve | 1.000 | 3.52× | 25.6× |
+| + the category premium | 1.002 | 3.35× | 26.7× |
+| + the week and the age | 1.002 | 3.36× | 29.6× |
 
-### 3. momentum(change_7d) — the last week
-
-```
-momentum = clamp(1 + 0.45 · clamp(change_7d, −60, +150) / 100, 0.55, 1.85)
-```
-
-A 10% week moves value about 4.5%, not 10%, and the clip stops one week from deciding a rank. A protocol
-with no seven-day reading takes a neutral 1.00.
-
-### 4. tenure(age) — how long it has run with no token
-
-```
-tenure = 0.62 + 0.72 · min(age_days, 1460) / 1460
-```
-
-`age_days` runs from the protocol's first day in DefiLlama's record to the snapshot's `as_of`. At listing
-the factor is 0.62; after four years it is 1.34, so tenure separates two protocols of the same size and
-the same week by more than a factor of two. A protocol with no listing date takes the midpoint, 0.98.
+The curve is the term the record supports: 3.52× against 4.79× for a flat multiple. The premium adds a
+little. Turning the week and the age off moves the error by 0.01×, inside the noise of 128 records, so
+those two are declared terms at weights the noise can carry, not fitted ones. The page prints the table
+so a reader can disagree with the choice.
 
 ## The band
 
-`implied_low_usd` and `implied_high_usd` are the same product with the category premium at its own 25th
-and 75th residual: how much the market disagrees with itself about this category. The board ranks on the
-point estimate and draws the band behind it as a bar, on a log scale across the rows on screen.
+`implied_low_usd` and `implied_high_usd` are the same product with the premium at the category's 25th
+and 75th residual. The board ranks on the point estimate and draws the band behind it as a bar.
 
-## The split the board keeps
+## What the board separates
 
-- **A protocol whose token already trades is never scored.** Its value is the market's market cap, and
-  it is shown in the *Token trades* view with its multiple against the curve. Those records are the fit
-  and the premiums; mixing a model's claim into a traded market cap would make the ranking meaningless.
-- **A protocol whose record carries no token is scored.** The page says "records no token", never "has
-  none": a record is not proof.
-- **A product is not a launch.** Below the floor the board applies the house's own watchlist rule and
-  leaves out wrapped, staked, bridged and versioned products, so an LST is never ranked as a token still
-  to come.
-- **No protocol name is special-cased.** The same function scores all rows.
+- **A protocol whose token already trades is never scored.** It is shown in *Token trades* with its
+  multiple against the curve. Those records are the fit and the premiums.
+- **A product is not a launch.** Below the floor the board applies the house's watchlist rule and leaves
+  out wrapped, staked, bridged and versioned products.
+- **A record is not proof.** The page says "records no token", never "has none".
 
-## Farm plans
+## Odds and verdicts
 
-Every plan is derived from the protocol's own record, and steps that do not apply are not written, so
-plans run from six steps to twelve. The category picks the qualifying action and the exit test — a CDP
-mint, a vault deposit, a delta-neutral pair, a restake and a bridge transfer are different plans with
-different risks to prove out. The first chain picks the wallet and the gas and adds a bridge when it is
-not a chain a reader already has. TVL and the priced-peer count pick the position size. The seven-day
-change decides whether to split the entry. The age decides whether a points season is plausible, the
-weekly cadence and the hold window.
+Each row carries a base rate from the record: of the protocols in its category and size band tracked
+two years or more, the share that record a token, with the k of n printed in the detail view. The
+verdict multiplies that rate by an assumed 0.001% share of the claimed value per qualifying wallet,
+subtracts the plan's gas and the carry on locked capital, and divides by the hours the plan asks for.
+Both assumptions are printed beside the number, and the verdict is linear in the share.
+
+## What the model does not do
+
+The snapshot is sealed at its fetch date, so nothing on the page is newer. Many rows rest on fewer than
+three priced peers and take the market's premium; only a third of the token-bearing protocols carry a
+market cap, so the curve rests on those; the odds are a cohort base rate, not a forecast, and a list of
+surviving protocols is survivorship-biased; no row predicts a launch or its date.
 
 ## Where the numbers come from, and how to check them
 
-- `../data.js` is written by `main.ts` from `/input/snapshot.json`: the rows with their raw figures and
-  every factor, the token-bearing records, the fitted curve and the premiums.
-- `board-preview.json` in this directory is the generated build manifest: the fit, the premiums, the
-  categories and the top of the board with every factor that produced each value.
-- `app.js` recomputes every row from its own rounded factors in the same order the model took them, and
-  the footer reports how many it reproduced — all of them on this snapshot. Each factor is rounded to
-  six places before the product, so the number on the screen is the number in `board.json`.
+- `../data.js` is written by `main.ts` from `/input/snapshot.json`: the rows with their factors, the
+  token-bearing records, the fitted curve, the validation table and the verdicts.
+- `board-preview.json` here is the generated build manifest: the fit, the premiums, the top of the board.
+- `app.js` recomputes every row from its rounded factors in the same order the model took them, and the
+  footer reports how many it reproduced — all of them on this snapshot. The number on the screen is the
+  number in `board.json`.
 - The page needs no network: two classic scripts, one stylesheet, no fonts, no images, no fetch.

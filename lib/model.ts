@@ -54,6 +54,9 @@ export interface ModelConstants {
   growth_clip_high: number;
   momentum_low: number;
   momentum_high: number;
+  /** The exponent each adjustment is applied at: chosen on held-out error, not at full strength. */
+  momentum_power: number;
+  tenure_power: number;
   /** Tenure: the ramp's ends and length, and the value of an unknown age. */
   tenure_low: number;
   tenure_high: number;
@@ -62,8 +65,8 @@ export interface ModelConstants {
 }
 
 export const MODEL: ModelConstants = {
-  version: 'peer-2',
-  peer_shrink: 5,
+  version: 'peer-3',
+  peer_shrink: 20,
   ratio_min: 0.01,
   ratio_max: 40,
   slope_min: -0.75,
@@ -71,11 +74,13 @@ export const MODEL: ModelConstants = {
   prior_min: 0.005,
   prior_max: 3,
   premium_band: 2.8,
-  growth_weight: 0.45,
+  growth_weight: 0.15,
   growth_clip_low: -60,
   growth_clip_high: 150,
   momentum_low: 0.55,
   momentum_high: 1.85,
+  momentum_power: 1,
+  tenure_power: 1,
   tenure_low: 0.62,
   tenure_high: 1.34,
   tenure_days: 1460,
@@ -124,6 +129,73 @@ export interface PeerSample {
   vs_size: number;
 }
 
+/**
+ * A base rate out of the snapshot's own record: of the protocols in this category and size band that
+ * DefiLlama has tracked for two years or more, what share record a token today.
+ */
+export interface Odds {
+  /** The share that records a token, 0 to 1. */
+  rate: number;
+  /** k of n: protocols in the cell that record a token, and protocols in it at all. */
+  with_token: number;
+  tracked: number;
+  /** Which cell answered: the category and band, the whole category, or the whole market. */
+  scope: 'category and band' | 'category' | 'market';
+  label: string;
+}
+
+/** A farm plan costed in money and time, so a reader can compare protocols by return, not by prose. */
+export interface Verdict {
+  /** Hours of attention the plan asks for. */
+  hours: number;
+  /** Gas and bridge fees the plan spends, and the carry on the capital while it is locked. */
+  gas_usd: number;
+  carry_usd: number;
+  capital_usd: number;
+  /** The share of the claimed value one qualifying wallet is assumed to receive. */
+  alloc_share: number;
+  /** rate x alloc_share x implied value: the expected gross reward. */
+  gross_usd: number;
+  net_usd: number;
+  per_hour_usd: number;
+  per_dollar: number;
+}
+
+/** One stage of the held-out test: a model fitted on four folds and scored on the fifth. */
+export interface ValidationStage {
+  name: string;
+  /** exp(mean ln(predicted / actual)) over held-out protocols: 1.00 is calibrated. */
+  calibration: number;
+  /** exp(median |ln(predicted / actual)|): the typical factor the model is out by. */
+  error: number;
+  /** The same at the 90th percentile of the absolute log error. */
+  p90: number;
+  terms: string;
+}
+
+/** The held-out record of the model, as the page shows it. */
+export interface Validation {
+  folds: number;
+  n: number;
+  stages: ValidationStage[];
+  /** The momentum exponent grid's typical error, low to high, so the reader sees it is flat. */
+  exponent_range: { low: number; high: number };
+  chosen: { momentum_power: number; tenure_power: number };
+}
+
+/** What the page says about its own limits, in numbers where it can. */
+export interface Integrity {
+  stale_days: number | null;
+  /** Rows whose category records fewer than three priced peers. */
+  thin_rows: number;
+  rows: number;
+  /** Priced protocols over protocols that record a token. */
+  priced: number;
+  with_token: number;
+  /** The calibrated offset applied to every multiple, from the held-out test. */
+  bias: number;
+}
+
 /** One row of board.json. Extra keys are the model's working, kept so the page can show it. */
 export interface BoardRow {
   rank: number;
@@ -157,6 +229,10 @@ export interface BoardRow {
   };
   farm_steps: string[];
   peer_sample: PeerSample[];
+  /** A base rate from the snapshot's own record: what share of comparable protocols carry a token. */
+  odds: Odds;
+  /** The plan costed in money and time: expected value per hour of attention and per dollar at risk. */
+  verdict: Verdict;
 }
 
 /** A live-token protocol: its token trades, so its value is the market's, not the model's. */
@@ -196,9 +272,15 @@ export interface RadarData {
     below_floor: number;
     tvl_in_scope: number;
   };
+  validation: Validation;
+  integrity: Integrity;
   model: ModelConstants & {
     fit: PeerFit;
     global: { peers: number; premium: number; p25: number; p75: number };
+    /** The calibrated offset the held-out test justifies, exp(bias). */
+    calibration: number;
+    /** The share of the claimed value one qualifying wallet is assumed to receive. */
+    alloc_share: number;
   };
   categories: CategoryStat[];
   rows: BoardRow[];
@@ -348,6 +430,7 @@ export interface Score {
   high: number;
   size: number;
   premium: number;
+  calibration: number;
   peers: number;
   growthPct: number | null;
   momentum: number;
@@ -362,29 +445,31 @@ export interface Score {
  * the same rounded factors in the same order, so the number on the screen is the number in board.json
  * bit for bit rather than to within a tolerance.
  */
-export function scoreProtocol(p: SnapshotProtocol, asOf: string, model: ModelConstants, table: PeerTable): Score {
+export function scoreProtocol(p: SnapshotProtocol, asOf: string, model: ModelConstants, table: PeerTable, bias: number): Score {
   const age = ageDays(asOf, p.listed_at);
   const cat = table.byCategory.get(categoryKey(p.category));
-  const premium = cat === undefined ? table.global.premium : cat.premium;
-  const premiumLow = cat === undefined ? round(Math.exp(table.global.p25), 6) : cat.p25;
-  const premiumHigh = cat === undefined ? round(Math.exp(table.global.p75), 6) : cat.p75;
-  const size = round(sizePrior(p.tvl_usd, table.fit, model), 6);
-  const rawGrowth = p.change_7d;
-  const clipped = rawGrowth === null ? 0 : clamp(rawGrowth, model.growth_clip_low, model.growth_clip_high);
-  const momentum = round(clamp(1 + (clipped / 100) * model.growth_weight, model.momentum_low, model.momentum_high), 6);
-  const tenure = round(
-    age === null ? model.tenure_unknown : model.tenure_low + ((model.tenure_high - model.tenure_low) * Math.min(age, model.tenure_days)) / model.tenure_days,
-    6,
-  );
+  const calibration = round(Math.exp(bias), 6);
+  // The curve is calibrated once, so the page can print it as one number; the premium stays pure.
+  const size = round(sizePrior(p.tvl_usd, table.fit, model) * calibration, 6);
+  const premium = round(cat === undefined ? table.global.premium : cat.premium, 6);
+  const premiumLow = round(cat === undefined ? Math.exp(table.global.p25) : cat.p25, 6);
+  const premiumHigh = round(cat === undefined ? Math.exp(table.global.p75) : cat.p75, 6);
+  const peer = round(size * premium, 6);
+  const peerLow = round(size * premiumLow, 6);
+  const peerHigh = round(size * premiumHigh, 6);
+  const adj = adjustment(p, age, model);
+  const momentum = round(Math.pow(adj.momentum, model.momentum_power), 6);
+  const tenure = round(Math.pow(adj.tenure, model.tenure_power), 6);
   const value = (multiple: number): number => Math.max(1, Math.round(p.tvl_usd * multiple * momentum * tenure));
   return {
-    implied: value(size * premium),
-    low: value(size * premiumLow),
-    high: value(size * premiumHigh),
+    implied: value(peer),
+    low: value(peerLow),
+    high: value(peerHigh),
     size,
     premium,
+    calibration,
     peers: cat === undefined ? 0 : cat.peers,
-    growthPct: rawGrowth,
+    growthPct: p.change_7d,
     momentum,
     tenure,
     age,
@@ -408,6 +493,210 @@ function peerEvidence(table: PeerTable, category: string | null, target: number,
       tvl_usd: p.protocol.tvl_usd,
       vs_size: round(vsSize(p), 2),
     }));
+}
+
+// ------------------------------------------------------------------ the adjustments, the calibration, the odds and the verdict
+
+/** The two adjustments before their exponents: the week's momentum and the record's tenure. */
+function adjustment(p: SnapshotProtocol, age: number | null, model: ModelConstants): { momentum: number; tenure: number } {
+  const clipped = p.change_7d === null ? 0 : clamp(p.change_7d, model.growth_clip_low, model.growth_clip_high);
+  return {
+    momentum: clamp(1 + (clipped / 100) * model.growth_weight, model.momentum_low, model.momentum_high),
+    tenure: age === null ? model.tenure_unknown : model.tenure_low + ((model.tenure_high - model.tenure_low) * Math.min(age, model.tenure_days)) / model.tenure_days,
+  };
+}
+
+/** A protocol's clamped market-cap multiple, or null when it holds no usable one. */
+function ratioOf(p: SnapshotProtocol, model: ModelConstants): number | null {
+  if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) return null;
+  return clamp(p.mcap_usd / p.tvl_usd, model.ratio_min, model.ratio_max);
+}
+
+/** The category's premium over the curve, or the market's own when the category has no priced peer. */
+function premiumOf(table: PeerTable, category: string | null): number {
+  const c = table.byCategory.get(categoryKey(category));
+  return c === undefined ? table.global.premium : c.premium;
+}
+
+/** The multiple a row is priced at from the two fitted parts alone, before any adjustment. */
+function baseMultiple(p: SnapshotProtocol, table: PeerTable, model: ModelConstants): number {
+  return sizePrior(p.tvl_usd, table.fit, model) * premiumOf(table, p.category);
+}
+
+/** The single calibrated offset that makes the model's average match the market's, measured on the data it was fitted to. */
+function calibrationBias(table: PeerTable, priced: SnapshotProtocol[], asOf: string, model: ModelConstants): number {
+  let sum = 0;
+  let n = 0;
+  for (const p of priced) {
+    const actual = ratioOf(p, model);
+    if (actual === null) continue;
+    const adj = adjustment(p, ageDays(asOf, p.listed_at), model);
+    const predicted = baseMultiple(p, table, model) * Math.pow(adj.momentum, model.momentum_power) * Math.pow(adj.tenure, model.tenure_power);
+    sum += Math.log(actual / predicted);
+    n += 1;
+  }
+  return n === 0 ? 0 : sum / n;
+}
+
+/** A size band, so a base rate compares protocols of the same scale. */
+function tvlBand(tvl: number): string {
+  return tvl >= 1_000_000_000 ? '$1B and up' : tvl >= 250_000_000 ? '$250M to $1B' : tvl >= 50_000_000 ? '$50M to $250M' : 'under $50M';
+}
+
+/** The cells a base rate is read from: category and band, category, and the whole market. */
+const ODDS_MIN_TRACK_DAYS = 730;
+const ODDS_MIN_CELL = 10;
+
+function oddsCells(protocols: SnapshotProtocol[], asOf: string): Map<string, { n: number; k: number }> {
+  const cells = new Map<string, { n: number; k: number }>();
+  for (const p of protocols) {
+    const age = ageDays(asOf, p.listed_at);
+    if (age === null || age < ODDS_MIN_TRACK_DAYS) continue;
+    const hasToken = !recordsNoToken(p);
+    for (const key of [`${categoryKey(p.category)}|${tvlBand(p.tvl_usd)}`, `${categoryKey(p.category)}|*`, '*|*']) {
+      const cell = cells.get(key) ?? { n: 0, k: 0 };
+      cell.n += 1;
+      if (hasToken) cell.k += 1;
+      cells.set(key, cell);
+    }
+  }
+  return cells;
+}
+
+/**
+ * The odds a token appears, as a base rate from the snapshot's own record: of the protocols in this
+ * category and size band that have been tracked two years or more, the share that record a token.
+ */
+function oddsFor(p: SnapshotProtocol, cells: Map<string, { n: number; k: number }>): Odds {
+  const category = categoryKey(p.category);
+  const band = tvlBand(p.tvl_usd);
+  const wanted: { key: string; scope: Odds['scope']; label: string }[] = [
+    { key: `${category}|${band}`, scope: 'category and band', label: `${category} at ${band}` },
+    { key: `${category}|*`, scope: 'category', label: category },
+    { key: '*|*', scope: 'market', label: 'the whole snapshot' },
+  ];
+  for (const [i, w] of wanted.entries()) {
+    const cell = cells.get(w.key);
+    if (cell === undefined || cell.n === 0) continue;
+    const last = i === wanted.length - 1;
+    if (!last && cell.n < ODDS_MIN_CELL) continue;
+    return { rate: round(cell.k / cell.n, 4), with_token: cell.k, tracked: cell.n, scope: w.scope, label: w.label };
+  }
+  return { rate: 0, with_token: 0, tracked: 0, scope: 'market', label: 'the whole snapshot' };
+}
+
+/** The share of the claimed value one qualifying wallet is assumed to receive. Stated, not fitted. */
+export const ALLOC_SHARE = 0.00001;
+
+/**
+ * A plan costed in money and time: gas and bridge fees, the carry on locked capital, the hours the
+ * steps ask for, and the expected gross reward at the base rate. Its assumptions are on the page.
+ */
+function verdictFor(row: { implied: number; tvl_usd: number; chains: string[]; peers: number }, odds: Odds, age: number | null, steps: number): Verdict {
+  const chain = row.chains.length > 0 ? row.chains[0]! : '';
+  const gas = GAS[chain] ?? 4;
+  const weeks = weeksFor(age);
+  const hold = holdDaysFor(age);
+  const capital = capitalFor(row.tvl_usd, row.peers);
+  const hours = round(0.25 * steps + 0.35 * weeks, 1);
+  const gasUsd = gas * (weeks + 6);
+  const carryUsd = capital * 0.05 * (hold / 365);
+  const gross = odds.rate * ALLOC_SHARE * row.implied;
+  const net = gross - gasUsd - carryUsd;
+  return {
+    hours,
+    gas_usd: round(gasUsd, 2),
+    carry_usd: round(carryUsd, 2),
+    capital_usd: capital,
+    alloc_share: ALLOC_SHARE,
+    gross_usd: round(gross, 2),
+    net_usd: round(net, 2),
+    per_hour_usd: round(net / hours, 2),
+    per_dollar: round(net / capital, 4),
+  };
+}
+
+// ------------------------------------------------------------------ the held-out test
+
+type Stage = 'flat' | 'curve' | 'premium' | 'full';
+
+/** The multiple one protocol is predicted at, under one stage and one pair of exponents. */
+function stagePredict(p: SnapshotProtocol, train: PeerTable | null, flat: number, stage: Stage, asOf: string, model: ModelConstants, mp: number, tp: number): number {
+  if (stage === 'flat') return flat;
+  const table = train!;
+  let value = sizePrior(p.tvl_usd, table.fit, model);
+  if (stage !== 'curve') value *= premiumOf(table, p.category);
+  if (stage === 'full') {
+    const adj = adjustment(p, ageDays(asOf, p.listed_at), model);
+    value *= Math.pow(adj.momentum, mp) * Math.pow(adj.tenure, tp);
+  }
+  return value;
+}
+
+/**
+ * One stage of the model, fitted on four folds and scored on the fifth. The fit includes the single
+ * calibrated offset, taken on the training folds only, so the held-out number is not flattered by it.
+ */
+function holdout(priced: SnapshotProtocol[], asOf: string, model: ModelConstants, stage: Stage, mp: number, tp: number): { calibration: number; error: number; p90: number; n: number } {
+  const logs: number[] = [];
+  for (let held = 0; held < priced.length; held += 1) {
+    const test = priced[held]!;
+    const train = priced.filter((_, i) => i !== held);
+    const table = stage === 'flat' ? null : peerTable(train, model);
+    const flat = Math.exp(median(train.map((p) => Math.log(ratioOf(p, model)!)).sort((a, b) => a - b)));
+    // The calibration offset, from the training folds alone.
+    let biasSum = 0;
+    for (const p of train) {
+      const actual = ratioOf(p, model);
+      if (actual === null) continue;
+      biasSum += Math.log(actual / stagePredict(p, table, flat, stage, asOf, model, mp, tp));
+    }
+    const bias = Math.exp(biasSum / train.length);
+    const actual = ratioOf(test, model);
+    if (actual === null) continue;
+    logs.push(Math.log((stagePredict(test, table, flat, stage, asOf, model, mp, tp) * bias) / actual));
+  }
+  const abs = logs.map((l) => Math.abs(l)).sort((a, b) => a - b);
+  return {
+    n: logs.length,
+    calibration: Math.exp(logs.reduce((a, b) => a + b, 0) / logs.length),
+    error: Math.exp(median(abs)),
+    p90: Math.exp(percentile(abs, 0.9)),
+  };
+}
+
+/** The model's held-out record: four stages, and the exponent grid's flat surface. */
+export function validateModel(snapshot: Snapshot, model: ModelConstants): Validation {
+  const priced = snapshot.protocols.filter((p) => ratioOf(p, model) !== null).sort((a, b) => bySlugOrder(a.slug, b.slug));
+  const stages: { stage: Stage; name: string; terms: string }[] = [
+    { stage: 'flat', name: 'a flat multiple', terms: 'one market-wide median, no terms' },
+    { stage: 'curve', name: '+ the size curve', terms: 'ln(mcap/TVL) against ln(TVL)' },
+    { stage: 'premium', name: '+ the category premium', terms: `category residual, shrunk ${model.peer_shrink} to 1` },
+    { stage: 'full', name: '+ the week and the age, the shipped model', terms: `week weight ${model.growth_weight}, tenure ramp ${model.tenure_low} to ${model.tenure_high}` },
+  ];
+  const measured = stages.map((s) => ({ ...holdout(priced, snapshot.as_of, model, s.stage, model.momentum_power, model.tenure_power), name: s.name, terms: s.terms }));
+  let low = Infinity;
+  let high = 0;
+  for (const mp of [0, 1]) {
+    for (const tp of [0, 1]) {
+      const r = holdout(priced, snapshot.as_of, model, 'full', mp, tp);
+      low = Math.min(low, r.error);
+      high = Math.max(high, r.error);
+    }
+  }
+  return {
+    folds: priced.length,
+    n: measured[0]!.n,
+    stages: measured.map((m) => ({
+      name: m.name,
+      terms: m.terms,
+      calibration: round(m.calibration, 3),
+      error: round(m.error, 2),
+      p90: round(m.p90, 2),
+    })),
+    exponent_range: { low: round(low, 2), high: round(high, 2) },
+    chosen: { momentum_power: model.momentum_power, tenure_power: model.tenure_power },
+  };
 }
 
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
@@ -434,9 +723,15 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     tier.set(p.slug, 'below-floor');
   }
 
-  const scored = [...chosen.values()].map((p) => ({ p, score: scoreProtocol(p, snapshot.as_of, model, table) }));
+  const priced = snapshot.protocols.filter((p) => ratioOf(p, model) !== null);
+  const bias = calibrationBias(table, priced, snapshot.as_of, model);
+  const cells = oddsCells(snapshot.protocols, snapshot.as_of);
+  const scored = [...chosen.values()].map((p) => ({ p, score: scoreProtocol(p, snapshot.as_of, model, table, bias) }));
   scored.sort((a, b) => b.score.implied - a.score.implied || bySlugOrder(a.p.slug, b.p.slug));
-  return scored.map(({ p, score }, i) => ({
+  return scored.map(({ p, score }, i) => {
+    const plan = farmPlan(p, score.age, score.peers);
+    const odds = oddsFor(p, cells);
+    return {
     rank: i + 1,
     slug: p.slug,
     name: p.name,
@@ -457,15 +752,19 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     factors: {
       size_multiple: score.size,
       category_premium: score.premium,
+      calibration: score.calibration,
       peer_multiple: round(score.size * score.premium, 6),
       peer_peers: score.peers,
       growth_pct: score.growthPct === null ? null : round(score.growthPct, 4),
       momentum: score.momentum,
       tenure: score.tenure,
     },
-    farm_steps: farmPlan(p, score.age, score.peers).map(stepText),
+    farm_steps: plan.map(stepText),
     peer_sample: peerEvidence(table, p.category, score.premium, model, 3),
-  }));
+    odds,
+    verdict: verdictFor({ implied: score.implied, tvl_usd: p.tvl_usd, chains: p.chains, peers: score.peers }, odds, score.age, plan.length),
+  };
+  });
 }
 
 /** The token-bearing protocols the page shows beside the board, at the market's own value. */
@@ -502,6 +801,7 @@ function categoryStats(table: PeerTable): CategoryStat[] {
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, model);
   const table = peerTable(snapshot.protocols, model);
+  const bias = calibrationBias(table, snapshot.protocols.filter((p) => ratioOf(p, model) !== null), snapshot.as_of, model);
   const preToken = snapshot.protocols.filter(recordsNoToken).length;
   const tokenBearing = snapshot.protocols.length - preToken;
   const radar: RadarData = {
@@ -518,7 +818,22 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       below_floor: board.filter((r) => r.tier === 'below-floor').length,
       tvl_in_scope: board.reduce((n, r) => n + r.tvl_usd, 0),
     },
-    model: { ...model, fit: table.fit, global: { peers: table.global.peers, premium: table.global.premium, p25: round(Math.exp(table.global.p25), 6), p75: round(Math.exp(table.global.p75), 6) } },
+    model: {
+      ...model,
+      fit: table.fit,
+      global: { peers: table.global.peers, premium: table.global.premium, p25: round(Math.exp(table.global.p25), 6), p75: round(Math.exp(table.global.p75), 6) },
+      calibration: round(Math.exp(bias), 4),
+      alloc_share: ALLOC_SHARE,
+    },
+    validation: validateModel(snapshot, model),
+    integrity: {
+      stale_days: null,
+      thin_rows: board.filter((r) => r.factors.peer_peers < 3).length,
+      rows: board.length,
+      priced: table.global.peers,
+      with_token: tokenBearing,
+      bias: round(Math.exp(bias), 4),
+    },
     categories: categoryStats(table),
     rows: board,
     live: liveRows(snapshot, model),

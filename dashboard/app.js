@@ -141,7 +141,7 @@
   function renderFormula() {
     var top = R.rows[0];
     var boxes = [
-      ['The formula', 'TVL × peer × momentum × tenure', 'peer = size curve × category premium', 'eq'],
+      ['The formula', 'TVL × peer × momentum × tenure', 'peer = curve × category × calibration', 'eq'],
       ['Size curve', 'TVL^' + F.fit.b.toFixed(2), 'fitted on ' + F.fit.n + ' priced tokens', ''],
       ['Category premium', premiumRange(), 'over the curve, by category', ''],
       ['Tenure ramp', F.tenure_low.toFixed(2) + '–' + F.tenure_high.toFixed(2) + '×', 'over ' + group(F.tenure_days) + ' days with no token', ''],
@@ -185,6 +185,16 @@
     $('empty').textContent = rows.length ? '' : 'No protocol matches that filter. Clear one and the board comes back.';
   }
 
+  function renderIntegrity() {
+    var I = R.integrity;
+    var V = R.validation;
+    var last = V.stages[V.stages.length - 1];
+    $('integrity').innerHTML = '<b>What this model does not do.</b> Sealed ' + esc(R.meta.as_of) +
+      ' · ' + I.thin_rows + ' of ' + I.rows + ' rows rest on under 3 priced peers · ' + I.priced + ' of ' + I.with_token +
+      ' token-bearing protocols carry a market cap · held-out error ' + last.error.toFixed(2) + '×' +
+      ' · odds are a base rate, not a forecast · no row predicts a launch.';
+  }
+
   /* ------------------------------------------------------------------ the board */
 
   var COLS = [
@@ -194,6 +204,7 @@
     ['growth', '7-day', 'num'],
     ['age', 'No token for', 'num'],
     ['peer', 'Peer ×', 'num'],
+    ['verdict', 'Verdict', 'num'],
     ['rank', 'Implied value', 'num']
   ];
 
@@ -217,6 +228,7 @@
 
   function renderRow(row, place) {
     var f = row.factors;
+    var v = row.verdict;
     var g = row.change_7d == null ? 'flat' : row.change_7d > 0.05 ? 'up' : row.change_7d < -0.05 ? 'down' : 'flat';
     var seg = place(row.implied_low_usd, row.implied_high_usd);
     var pin = place(row.implied_value_usd, row.implied_value_usd);
@@ -228,6 +240,8 @@
       '<div class="delta ' + g + '" role="cell">' + pct(row.change_7d) + '</div>' +
       '<div class="num-cell" role="cell">' + track(row.age_days) + '<small>tracked</small></div>' +
       '<div class="num-cell" role="cell">' + mult(f.peer_multiple) + '<small><span class="dot ' + grade(f.peer_peers) + '"></span>' + gradeWord(f.peer_peers) + '</small></div>' +
+      '<div class="num-cell ' + (v.per_hour_usd >= 0 ? 'plus' : 'minus') + '" role="cell">' + (v.per_hour_usd >= 0 ? '+' : '-') +
+        '$' + Math.abs(Math.round(v.per_hour_usd)) + '/h<small>' + Math.round(v.hours) + ' h work</small></div>' +
       '<div class="implied" role="cell"><b>' + usd(row.implied_value_usd) + '</b><span class="track"><i style="left:' + seg.left.toFixed(1) + '%;width:' + seg.width.toFixed(1) + '%"></i><u style="left:' + pin.left.toFixed(1) + '%"></u></span></div>' +
       '</div>';
   }
@@ -271,6 +285,16 @@
     return { action: m[1], cost: m[2], time: m[3] };
   }
 
+  function verdictSentence(row) {
+    var v = row.verdict;
+    var o = row.odds;
+    var sign = v.net_usd >= 0 ? '' : '-';
+    return 'At the base rate — ' + o.with_token + ' of ' + o.tracked + ' protocols in ' + o.label + ', tracked two years or more, record a token, ' +
+      Math.round(o.rate * 100) + '% — and an assumed ' + (v.alloc_share * 100).toFixed(3) + '% of the claimed value per qualifying wallet, the position expects $' +
+      group(Math.round(Math.abs(v.gross_usd))) + ' gross, less $' + Math.round(v.gas_usd) + ' of gas and $' + v.carry_usd.toFixed(2) +
+      ' of carry, over ' + v.hours + ' hours of attention and $' + v.capital_usd + ' at risk. The figure is linear in that assumed share, and the odds are a base rate, not a forecast.';
+  }
+
   function renderPlan(row) {
     return '<ol class="plan">' + row.farm_steps.map(function (step) {
       var p = stepParts(step);
@@ -294,6 +318,7 @@
     if (!row) { closeDetail(); return; }
     state.slug = slug;
     var f = row.factors;
+    var v = row.verdict;
     var trophy = row.tier === 'watchlist' ? 'house watchlist' : 'below the $' + Math.round(R.meta.floor_usd / 1e6) + 'M floor';
     var draw = $('drawer');
     draw.innerHTML = '<div class="drawer-in">' +
@@ -320,6 +345,15 @@
         '<div class="equation">' + usd(row.tvl_usd) + ' × ' + f.size_multiple.toFixed(4) + ' × ' + f.category_premium.toFixed(4) + ' × ' +
           f.momentum.toFixed(4) + ' × ' + f.tenure.toFixed(4) + ' = <b>' + exact(row.implied_value_usd) + '</b></div>' +
         '<p class="why">' + esc(whySentence(row)) + '</p>' +
+
+        '<h3>The verdict, costed in money and time</h3>' +
+        '<div class="verdict">' +
+          '<div class="' + (v.per_hour_usd >= 0 ? 'pos' : 'neg') + '"><span>per hour</span><b>' + (v.per_hour_usd >= 0 ? '+' : '-') + '$' + Math.abs(Math.round(v.per_hour_usd)) + '</b></div>' +
+          '<div class="' + (v.per_dollar >= 0 ? 'pos' : 'neg') + '"><span>per $ at risk</span><b>' + v.per_dollar.toFixed(2) + '×</b></div>' +
+          '<div><span>odds</span><b>' + Math.round(row.odds.rate * 100) + '%</b></div>' +
+          '<div class="' + (v.net_usd >= 0 ? 'pos' : 'neg') + '"><span>net</span><b>' + (v.net_usd >= 0 ? '+' : '-') + '$' + group(Math.abs(Math.round(v.net_usd))) + '</b></div>' +
+        '</div>' +
+        '<p class="why">' + esc(verdictSentence(row)) + '</p>' +
 
         '<h3>Peers the market already prices</h3>' +
         renderPeers(row) +
@@ -367,36 +401,46 @@
   }
 
   function renderMethod() {
-    var cats = CATS.slice(0, 12);
+    var cats = CATS.slice(0, 8);
+    var V = R.validation;
+    var last = V.stages[V.stages.length - 1];
+    var at = function (tvl) { return factor(Math.exp(F.fit.a + F.fit.b * Math.log(tvl))); };
     $('method').innerHTML =
       '<div class="panel-head"><div><h2>How the implied value is made</h2>' +
-      '<p>One formula scores all ' + R.meta.board_size + ' rows, and no name is special-cased: the inputs are the snapshot\'s TVL, its seven-day change and the protocol\'s own listing date. The peer multiple has two parts, both read off the same snapshot.</p></div></div>' +
+      '<p>One formula scores all ' + R.meta.board_size + ' rows, no name is special-cased, and every term was put to a leave-one-out test on the snapshot\'s own priced protocols.</p></div></div>' +
       '<div class="cards">' +
-        '<div class="card wide"><h3>The formula</h3>' +
-          '<p><code>implied = TVL × peer × momentum × tenure</code>, with <code>peer = size curve(TVL) × category premium</code>.</p>' +
-          '<p><b>The size curve.</b> ' + F.fit.n + ' protocols record both a market cap and a TVL, and each is one reading of mcap over TVL. Regressing ln(mcap/TVL) on ln(TVL) gives a slope of ' + F.fit.b.toFixed(3) + ': the market pays a smaller multiple for a larger TVL, because a billion of TVL is a different claim from fifty million. At this snapshot the curve runs ' + factor(F.fit.a > 0 ? Math.exp(F.fit.a + F.fit.b * Math.log(5e7)) : 0) + '× at $50M and ' + factor(Math.exp(F.fit.a + F.fit.b * Math.log(1e9))) + '× at $1B.</p>' +
-          '<p><b>The category premium.</b> Each priced protocol sits some factor above or below the curve at its own size; a category\'s premium is the median of its own peers\' factors, shrunk toward the market\'s with a weight of ' + F.peer_shrink + ' peers and held inside ' + F.premium_band + '× of it. Seven peers outweigh the market; one does not.</p>' +
-          '<p><b>Momentum and tenure.</b> The week is clipped to ' + F.growth_clip_low + '% to +' + F.growth_clip_high + '% and weighted at ' + F.growth_weight + ', so it moves value but cannot decide a rank. Tenure ramps ' + F.tenure_low + '× to ' + F.tenure_high + '× over ' + group(F.tenure_days) + ' days without a token; an unrecorded age takes the neutral ' + F.tenure_unknown + '×.</p></div>' +
+        '<div class="card wide"><h3>The formula, and where each part comes from</h3>' +
+          '<p><code>implied = TVL × peer × momentum × tenure</code>, with <code>peer = size curve(TVL) × category premium × ' + factor(R.model.calibration) + '×</code> calibration.</p>' +
+          '<p><b>Size curve.</b> ' + F.fit.n + ' protocols record a market cap and a TVL, and each is one reading of mcap over TVL. Regressing ln(mcap/TVL) on ln(TVL) gives a slope of ' + F.fit.b.toFixed(3) + ' — the market pays less per dollar of TVL as TVL grows — so a dollar of TVL is ' + at(5e7) + '× at $50M and ' + at(1e9) + '× at $1B.</p>' +
+          '<p><b>Category premium.</b> Each priced protocol\'s residual over that curve, by category, shrunk toward the market\'s own with a weight of ' + F.peer_shrink + ' peers and capped at ' + F.premium_band + '×. A weight of 5 made the held-out error worse; ' + F.peer_shrink + ' is where the term stops costing anything.</p>' +
+          '<p><b>The week</b> enters at weight ' + F.growth_weight + ', clipped to ' + F.growth_clip_low + ' to +' + F.growth_clip_high + '%; at the 0.45 the first version used the held-out test got worse, so it is small. <b>The age</b> ramps ' + F.tenure_low + ' to ' + F.tenure_high + '× over ' + group(F.tenure_days) + ' days with no token, and an unrecorded age takes ' + F.tenure_unknown + '×.</p></div>' +
+        '<div class="card wide"><h3>Held-out test: every term kept or dropped on the record</h3>' +
+          '<p>Leave-one-out: refit on ' + (V.n - 1) + ' priced protocols and score the one held out, ' + V.n + ' times. The typical error is the factor a prediction is out by, at the median.</p>' +
+          '<table class="grid-table"><thead><tr><th>Model</th><th>Calibration</th><th>Typical error</th><th>90th</th></tr></thead><tbody>' +
+          V.stages.map(function (s) {
+            return '<tr><td>' + esc(s.name) + '</td><td class="n">' + s.calibration.toFixed(3) + '</td><td class="n">' + s.error.toFixed(2) + '×</td><td class="n">' + s.p90.toFixed(1) + '×</td></tr>';
+          }).join('') +
+          '</tbody></table>' +
+          '<p>The curve is the term the record supports: ' + V.stages[1].error.toFixed(2) + '× against ' + V.stages[0].error.toFixed(2) + '× for a flat multiple. Turning the week and the age off moves it to ' + V.stages[2].error.toFixed(2) + '×, inside the noise of ' + V.n + ' records, so those two are declared terms at a weight the noise can carry rather than fitted ones. Every row prints its own band at the category\'s 25th and 75th premium.</p></div>' +
         '<div class="card"><h3>Read off the snapshot</h3><div class="spec">' +
           'priced tokens <span>' + F.fit.n + '</span><br>' +
           'curve slope <span>' + F.fit.b.toFixed(3) + '</span><br>' +
-          'at $50M <span>' + factor(Math.exp(F.fit.a + F.fit.b * Math.log(5e7))) + '×</span><br>' +
-          'at $1B <span>' + factor(Math.exp(F.fit.a + F.fit.b * Math.log(1e9))) + '×</span><br>' +
-          'market premium <span>' + factor(G.premium) + '×</span><br>' +
-          'peer shrink <span>' + F.peer_shrink + '</span><br>' +
-          'momentum range <span>' + F.momentum_low + ' to ' + F.momentum_high + '×</span><br>' +
+          'at $50M <span>' + at(5e7) + '×</span><br>' +
+          'at $1B <span>' + at(1e9) + '×</span><br>' +
+          'calibration <span>' + factor(R.model.calibration) + '×</span><br>' +
+          'premium shrink <span>' + F.peer_shrink + '</span><br>' +
+          'week weight <span>' + F.growth_weight + '</span><br>' +
           'tenure ramp <span>' + F.tenure_low + ' to ' + F.tenure_high + '×</span><br>' +
-          'rows below the floor <span>' + R.meta.below_floor + '</span></div></div>' +
+          'held-out error <span>' + last.error.toFixed(2) + '×</span></div></div>' +
         '<div class="card"><h3>The split the board keeps</h3>' +
-          '<p><b>' + R.meta.token_bearing + '</b> of the snapshot\'s ' + R.meta.protocols + ' protocols record a token; they are never scored and never ranked. <b>' + R.meta.pre_token + '</b> record none, and ' + R.meta.watchlist + ' of those clear the $' + Math.round(R.meta.floor_usd / 1e6) + 'M floor.</p>' +
-          '<p>The board is the floor plus the ' + R.meta.below_floor + ' pre-token protocols under it with the most TVL, after the same product rule: a wrapped, staked or bridged product of a token that already trades is not a token still to come.</p></div>' +
+          '<p><b>' + R.meta.token_bearing + '</b> of ' + R.meta.protocols + ' protocols record a token and are never scored; <b>' + R.meta.pre_token + '</b> record none, and ' + R.meta.watchlist + ' clear the $' + Math.round(R.meta.floor_usd / 1e6) + 'M floor. The board adds the ' + R.meta.below_floor + ' pre-token protocols below it, after the same product rule.</p></div>' +
+        '<div class="card wide"><h3>Odds and verdicts</h3>' +
+          '<p>Each row carries a base rate from the record: of the protocols in its category and size band tracked two years or more, the share that record a token, with the k of n printed in the detail view. The verdict multiplies that rate by an assumed ' + (R.model.alloc_share * 100).toFixed(3) + '% share of the claimed value per qualifying wallet, subtracts the plan\'s gas and the carry on locked capital, and divides by the hours the plan asks for. Both assumptions are printed on the row, and the verdict is linear in the share.</p></div>' +
         '<div class="card wide"><h3>Categories with the most priced peers</h3>' +
-          '<table class="grid-table"><thead><tr><th>Category</th><th>Peers</th><th>Premium over curve</th><th>25th</th><th>75th</th></tr></thead><tbody>' +
+          '<table class="grid-table"><thead><tr><th>Category</th><th>Peers</th><th>Premium</th><th>25th</th><th>75th</th></tr></thead><tbody>' +
           cats.map(function (c) {
             return '<tr><td>' + esc(c.name) + '</td><td class="n">' + c.peers + '</td><td class="n">' + factor(c.premium) + '×</td><td class="n">' + factor(c.p25) + '×</td><td class="n">' + factor(c.p75) + '×</td></tr>';
           }).join('') + '</tbody></table></div>' +
-        '<div class="card wide"><h3>Farm plans</h3>' +
-          '<p>Every plan is built from the protocol\'s record, not from a template: the category picks the qualifying action and the exit test (a vault deposit, a CDP mint, a delta-neutral pair, a restake and a bridge transfer are five different plans), the first chain picks the wallet and the gas figure, TVL and the priced-peer count pick the position size, the seven-day change decides whether to split the entry, and the age decides whether a points season is plausible and how long the hold is. Steps that do not apply are not written, so plans run from six steps to eleven.</p></div>' +
       '</div>';
   }
 
@@ -417,7 +461,8 @@
     for (var i = 0; i < R.rows.length; i++) {
       var r = R.rows[i];
       var f = r.factors;
-      var value = Math.max(1, Math.round(r.tvl_usd * f.size_multiple * f.category_premium * f.momentum * f.tenure));
+      // The same product, in the same order, on the same rounded factors the row prints.
+      var value = Math.max(1, Math.round(r.tvl_usd * f.peer_multiple * f.momentum * f.tenure));
       if (value === r.implied_value_usd) matched += 1;
     }
     return { matched: matched, total: R.rows.length };
@@ -506,6 +551,7 @@
   renderFacts();
   renderFormula();
   renderControls();
+  renderIntegrity();
   renderLive();
   renderMethod();
   CHECK = verify();

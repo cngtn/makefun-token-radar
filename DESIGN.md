@@ -1,138 +1,176 @@
-# Token Radar — the value model
+# Token Radar — the value model, tested
 
 The radar answers one question per protocol: **if this protocol stayed exactly as its record shows
-today, what would a token that claims the protocol be worth?** It is not a forecast that a token will
-be issued. It is a valuation of the claim a token would hold.
-
-The rule the judge applies is that the implied value must follow from the snapshot's own figures —
-TVL, the seven-day change, and how long the protocol has run with no token — and never from a list of
-names. So every constant below is read off the snapshot rather than typed in.
+today, what would a token that claims the protocol be worth?** It is not a forecast that a token will be
+issued. It is a valuation of the claim a token would hold, with the model's own out-of-sample error
+printed beside it.
 
 ## The formula
 
-For a protocol `p` whose record carries no token:
-
 ```
 implied(p) = TVL(p) × peer(p) × momentum(p) × tenure(p)
-peer(p)    = size curve(TVL(p)) × category premium(category(p))
+peer(p)    = size curve(TVL(p)) × category premium(category(p)) × calibration
 ```
 
-## 1. The size curve: what the market pays at this size
+## 1. The size curve, fitted on the snapshot's own priced protocols
 
-The snapshot carries 416 protocols that already record a token, and 128 of them record a market cap as
-well as a TVL. Each is one observation of the number the radar needs:
-
-```
-ratio(q) = mcap(q) / TVL(q)          clamped to [0.01, 40] to drop illiquid outliers
-```
-
-In this snapshot the ratio falls with size, and steeply: the median is 0.325× under $100M of TVL, 0.13×
-between $100M and $300M, 0.08× between $300M and $1B, 0.03× between $1B and $10B. A least-squares fit
-of `ln(ratio)` on `ln(TVL)` over the 128 gives **ln(ratio) = 5.941 − 0.416 · ln(TVL)**: a dollar of TVL
-at $50M is priced at 0.239×, the same dollar at $1B at 0.069×. The radar uses that curve as the
-reference for a protocol of any size, so an $80M protocol and a $2.8B protocol are not priced with the
-same multiple.
-
-The slope is clamped to [−0.75, −0.05] and the curve's output to [0.005, 3] so a broken fit cannot
-become a finding, but on this snapshot neither clamp binds.
-
-## 2. The category premium: how far a category sits above the curve
-
-The size curve leaves a residual for every priced protocol: `ln(ratio) − ln(size curve(TVL))`. A
-category's premium is the median of its own peers' residuals, shrunk toward the market's own median
-residual (0.890× in this snapshot) with a weight of **k = 5** peers:
+416 protocols in the snapshot record a token; 128 of those also record a market cap. Each is one
+observation of what the market pays per dollar of TVL:
 
 ```
-premium(c) = exp( ( n_c·R_c + k·R_market ) / (n_c + k) )     held inside 2.8× of the market's
+ratio(q) = mcap(q) / TVL(q)        clamped to [0.01, 40]
 ```
 
-A category with five peers weighs as much as the market prior; a category with one peer is mostly the
-market's own figure. The dashboard prints both parts of the multiple for every row, the peer count, and
-the priced protocols the premium was read from, with each one's own multiple against the curve.
-
-### The correction this model carries
-
-The first version of this entry used a single market-wide median multiple of 0.214× for every protocol.
-On the snapshot's own figures that was wrong at the top of the board: it put Steakhouse Financial, a
-risk curator with $2.75B of TVL, at **$802M — 29% of its TVL and about ten times what the market pays
-per dollar of TVL at that size**. It also rested that category's entire premium on one priced peer,
-Api3, a $12M oracle protocol with a 2.97× ratio, which says little about a $2.75B vault curator.
-
-The ranking was fixed, not the display. The size curve prices the claim at its own scale, and the
-premium's shrinkage limits what one small peer can do: Risk Curators now prices at 1.25× the curve
-instead of 1.55× the market, and rank 1 is **$136.7M**, about 5% of TVL — inside the range the market's
-own $1B-plus protocols trade at. The board's top twenty went from six near-identical Risk Curator rows
-to a mix of risk curators, RWA, CDP and allocator vaults.
-
-## 3. Momentum: the seven-day change
+The ratio falls with size and steeply: 0.325× under $100M of TVL, 0.13× from $100M–$300M, 0.08× from
+$300M–$1B, 0.03× from $1B–$10B. A least-squares fit of `ln(ratio)` on `ln(TVL)` over the 128 gives
 
 ```
-momentum(p) = clamp( 1 + 0.45 × clamp(change_7d, −60, +150)/100 , 0.55 , 1.85 )
+ln(ratio) = 5.941 − 0.416·ln(TVL)
 ```
 
-The clip stops one week from deciding a ranking; the weight says a 10% weekly gain is worth more than
-10% of the multiple, not 10% of the value. A null reading is a neutral 1.00.
+so a dollar of TVL is worth 0.239× at $50M and 0.069× at $1B. Slope clamped to [−0.75, −0.05] and the
+curve's output to [0.005, 3] so a broken fit cannot become a finding; on this snapshot neither binds.
 
-## 4. Tenure: how long it has run with no token
+## 2. The category premium, shrunk hard
+
+Each priced protocol's residual over the curve is `ln(ratio) − ln(size curve(TVL))`. A category's
+premium is the median of its own peers' residuals, shrunk toward the market's own (0.89×) with a weight
+of **k = 20** peers and held inside 2.8× of it. The weight is 20, not the 5 the previous version used,
+because the held-out test below says so: at k = 5 the premium made the typical held-out error worse
+(3.68× against 3.54× for the curve alone); at k = 20 it stops costing anything and the model is better
+with it than without. The effect is that a category moves the multiple by a few per cent, not by a
+third — which is what 128 records can actually support.
+
+## 3. One calibrated offset
+
+After the curve and the premium are fitted, a single scalar multiplies the result so that the model's
+average equals the market's average on the data it was fitted to: **1.065×** on this snapshot. It is
+computed at build time, applied to the curve, and printed on the method page. It is the only free
+scalar, and the held-out test refits it on the training folds, so it cannot flatter the result.
+
+## 4. Momentum and tenure, at the weight the noise can carry
 
 ```
-tenure(p) = 0.62 + 0.72 × min(age_days, 1460) / 1460          age_days from listed_at
-age unknown ⇒ 0.98 (the midpoint)
+momentum = clamp(1 + 0.15 × clamp(change_7d, −60, +150)/100, 0.55, 1.85)
+tenure   = 0.62 + 0.72 × min(age_days, 1460)/1460          (age unknown ⇒ 0.98)
 ```
 
-A protocol that has carried its TVL for four years through a cycle has a durable claim; one DefiLlama
-began tracking eight weeks ago may be a single incentive programme. The ramp runs 0.62× to 1.34×.
+The week's weight was 0.45 in the previous version. The held-out test says a strong week does not
+predict a higher market-cap multiple, so at 0.45 the term cost 1.5% of typical error; at 0.15 it sits
+inside the noise and the value still traces the week. Tenure keeps its full ramp: turning it off moves
+the held-out error by 0.01×, so it is a declared term, not a fitted one, and it is the term that makes
+"how long it has run with no token" mean something on the board.
 
-## 5. The band
+## The held-out test
 
-`low` and `high` are the same product with the category premium at its own 25th and 75th residual,
-shrunk the same way: how much the market disagrees with itself about this category. The board ranks on
-the point estimate and shows the band behind it.
+Leave-one-out over the 128 priced protocols: refit the curve, the premiums, the calibration and the
+adjustments on 127, predict the one held out, 128 times. "Typical error" is `exp(median |ln(predicted /
+actual)|)` — the factor a prediction is out by. "Calibration" is `exp(mean ln(predicted / actual))`,
+which is 1.00 when the model is neither over- nor under-predicting.
 
-## What the model refuses to do
+| Model | Calibration | Typical error | 90th percentile |
+| --- | --- | --- | --- |
+| a flat multiple | 1.000 | **4.79×** | 24.7× |
+| + the size curve | 1.000 | **3.52×** | 25.6× |
+| + the category premium (k=20) | 1.002 | **3.35×** | 26.7× |
+| + the week and the age — shipped | 1.002 | **3.36×** | 29.6× |
 
-- **No name is special-cased.** The same function scores all 178 rows.
-- **Token-bearing protocols are never scored.** They are shown at the market's own market cap in their
-  own view, and their records are the fit and the premiums.
-- **A record is not proof.** Every row says "records no token", never "has none".
-- **A product is not a launch.** Below the floor the board applies the house's own watchlist rule and
-  leaves out wrapped, staked, bridged and versioned products, so an LST is never ranked as a token
-  still to come.
+What survives: the size curve, decisively (−27% typical error against a flat multiple). What helps
+modestly: the category premium at heavy shrinkage. What does not survive as a fitted term: the week and
+the age — they are kept at declared weights, the page says so, and the table is printed for a reader who
+disagrees. The 90th percentile gets worse as terms are added; the model is better in the middle of the
+distribution than in the tail, and the band on every row is the honest answer to that.
 
-## The board
+### The corrections this model carries, in order
 
-All 40 house-watchlist protocols, plus the 138 pre-token protocols below the $50M floor with the most
-TVL after that rule: 178 rows, ranks 1..178 by descending implied value, ties broken by slug so two
-runs give the same bytes.
+1. **v1** used one market-wide median multiple (0.21×) for every protocol. That put Steakhouse
+   Financial, a risk curator with $2.75B of TVL, at $802M — 29% of its TVL and about ten times what the
+   snapshot's own protocols trade at that size — and rested its whole category premium on one $12M peer.
+2. **v2** replaced it with the fitted size curve and a category premium at k = 5. Rank 1 fell to
+   $136.7M, the top twenty stopped being one category, and the board applied the house's product rule
+   below the floor, so an LST is never ranked as a token still to come.
+3. **v3** (this one) put every term to a leave-one-out test: the premium moved to k = 20, the week's
+   weight fell from 0.45 to 0.15, and the board now prints its held-out error, its thin-peer count, a
+   base rate per row and a costed verdict per plan.
 
-## Farm plans
+## The band
 
-A plan is derived from the protocol's own record, and steps that do not apply are not written, so plans
-run from six steps to twelve:
+`implied_low_usd` and `implied_high_usd` are the same product with the premium at the category's 25th
+and 75th residual, shrunk the same way. The board ranks on the point estimate and draws the band behind
+it as a bar on a log scale across the rows on screen.
 
-- **the category** picks the qualifying action and the exit test. A CDP mint, a vault deposit, a
-  delta-neutral pair, a restake, a payments route and a bridge transfer are six different plans, each
-  with its own risk to prove out first (repay before withdrawing collateral; measure impermanent loss;
-  read the unbonding period; test the return bridge).
-- **the first chain** picks the wallet and the gas figure, and adds a bridge step when it is not a chain
-  a reader already has.
-- **TVL and the priced-peer count** pick the position size: $300 at a $5B protocol, $60 at a $40M one,
-  and 60–100% of that when the category has thin evidence.
-- **the seven-day change** decides whether to split the entry (a week down 10% or more) or to enter at
-  once (a week up 25% or more).
-- **the age** decides whether a points season is plausible, the weekly cadence, and the hold window.
+## Odds: a base rate from the record
+
+For every protocol with a listing date at least 730 days before `as_of`, the snapshot knows whether it
+records a token today. Group those by category and TVL band:
+
+```
+odds(p) = (protocols in p's cell that record a token) / (protocols in p's cell)
+```
+
+with a fallback chain: the cell if it holds 10 or more protocols, else the whole category, else the
+whole market. Every row prints its rate and its **k of n** and which cell answered. Market-wide, 205 of
+302 protocols tracked two years or more record a token (68%).
+
+This is a base rate, not a forecast, and the page says so: the cell does not condition on the protocol
+still having no token at its age, and DefiLlama's list only holds protocols that survived to be listed.
+
+## Verdicts: costed in money and time
+
+Each plan is costed so a reader can compare protocols by return, not by prose:
+
+```
+hours   = 0.25 × steps + 0.35 × weeks              (attention the plan asks for)
+gas     = chain gas × (weeks + 6)                  (entry, cadence, exit)
+carry   = capital × 5% × hold_days / 365           (opportunity cost of locked capital)
+gross   = odds × 0.00001 × implied value           (assumed share per qualifying wallet)
+net     = gross − gas − carry
+per hour = net / hours        per dollar = net / capital
+```
+
+The two assumptions are printed beside the number: a qualifying wallet receives **0.001%** of the
+claimed value, and capital carries **5% a year** while it is locked. The verdict is linear in the share,
+so a reader who prefers 0.005% multiplies by five. Plans that do not pay at the base rate show a
+negative verdict and the row stays on the board — 85 of 178 do, which is the point of printing it.
+
+## What the model does not do (printed on the page)
+
+- The snapshot is sealed at its fetch date; nothing on the page is newer.
+- 89 of 178 rows rest on fewer than three priced peers and take the market's premium.
+- Only 128 of 416 token-bearing protocols carry a market cap, so the curve rests on those.
+- The held-out typical error is 3.36×; the tail is worse.
+- The odds are a cohort base rate with survivor bias; no row predicts a launch or its date.
 
 ## Constants, in one place
 
 | Name | Value | Where it comes from |
 | --- | --- | --- |
 | size curve | ln(ratio) = 5.941 − 0.416·ln(TVL) | least squares on 128 priced protocols |
-| slope clamp | −0.75 … −0.05 | a single pair cannot invert the curve |
-| prior clamp | 0.005 … 3 | a fit outside this is broken, not a finding |
-| category shrink `k` | 5 | five peers outweigh the market prior once |
+| calibration | 1.065× | the fit's average offset, refitted in every fold |
+| category shrink `k` | 20 | held-out: k=5 made the error worse |
 | premium band | market ± 2.8× | no category beats the curve by more than ~3× |
 | ratio clamp | 0.01 … 40× | drops the 400× outlier in the snapshot |
-| momentum weight | 0.45 | a 10% week moves value ~4.5% |
-| momentum clamp | −60 … +150% | one week cannot decide a rank |
+| week weight | 0.15 | held-out: 0.45 cost 1.5% of typical error |
+| week clip | −60 … +150% | one week cannot decide a rank |
 | tenure ramp | 0.62 … 1.34 over 1460 days | four years of record at full weight |
 | unknown age | 0.98 | the midpoint of the ramp |
+| odds cell floor | 10 protocols | below that the cell is too thin to read |
+| odds age floor | 730 days | a younger protocol has not had the time |
+| assumed allocation | 0.001% of claimed value | stated, not fitted; verdict is linear in it |
+| capital carry | 5% a year | stated, not fitted |
+
+## The board and its subjects
+
+All 40 house-watchlist protocols, plus the 138 pre-token protocols below the $50M floor with the most
+TVL after the house's product rule: **178 rows**, ranks 1..178 by descending implied value, ties broken
+by slug so two runs give the same bytes. 178 distinct implied values on this snapshot.
+
+## Farm plans
+
+A plan is derived from the protocol's record, and steps that do not apply are not written, so plans run
+from six steps to twelve. The category picks the qualifying action and the exit test (a CDP mint, a
+vault deposit, a delta-neutral pair, a restake, a payments route and a bridge transfer are six different
+plans with different risks to prove out); the first chain picks the wallet and the gas and adds a bridge
+step when it is not a chain a reader already has; TVL and the priced-peer count pick the position size;
+the seven-day change decides whether to split the entry; the age decides whether a points season is
+plausible, the cadence and the hold.
