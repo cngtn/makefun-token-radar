@@ -274,19 +274,19 @@ table { border-collapse: collapse; width: 100%; }
 .equation b { color: var(--mint); font-weight: 600; }
 .why { margin-top: 8px; color: var(--ink-2); font-size: 11.5px; line-height: 1.5; }
 
-.plan { list-style: none; padding: 0; display: grid; gap: 6px; counter-reset: step; }
+.plan { list-style: none; padding: 0; display: grid; gap: 5px; counter-reset: step; }
 .plan li {
-  counter-increment: step; position: relative; padding: 8px 11px 9px 36px; border-radius: 8px;
-  background: var(--panel); border: 1px solid var(--line); font-size: 11.5px; line-height: 1.45;
+  counter-increment: step; position: relative; padding: 7px 10px 8px 33px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line); font-size: 11px; line-height: 1.4;
 }
 .plan li::before {
-  content: counter(step); position: absolute; left: 10px; top: 8px; width: 17px; height: 17px;
+  content: counter(step); position: absolute; left: 9px; top: 7px; width: 16px; height: 16px;
   display: grid; place-items: center; font: 560 11px/1 var(--mono); color: var(--mint);
   background: var(--mint-soft); border-radius: 4px;
 }
-.plan .cost { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.plan .cost { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
 .plan .cost i {
-  font-style: normal; font-size: 9.5px; color: var(--ink-2); font-family: var(--mono);
+  font-style: normal; font-size: 9px; color: var(--ink-2); font-family: var(--mono);
   border: 1px solid var(--line); background: var(--bg); border-radius: 4px; padding: 1px 6px;
 }
 .plan .cost i:first-child::before { content: "cost "; color: var(--ink-3); font-family: var(--sans); }

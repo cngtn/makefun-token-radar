@@ -46,12 +46,9 @@
     return (age / 365).toFixed(1) + ' years';
   }
   function mult(n) { return n.toFixed(2) + '×'; }
-  function shift(n) { return (n > 0 ? '+' : n < 0 ? '-' : '') + Math.abs(n).toFixed(2) + '×'; }
+  function factor(n) { return n >= 10 ? n.toFixed(1) : n >= 1 ? n.toFixed(2) : n >= 0.1 ? n.toFixed(2) : n.toFixed(3); }
   function grade(peers) { return peers >= 10 ? 'deep' : peers >= 5 ? 'fair' : peers > 0 ? 'thin' : 'none'; }
-  function gradeWord(peers) {
-    if (peers === 0) return 'market only';
-    return peers === 1 ? '1 peer' : peers + ' peers';
-  }
+  function gradeWord(peers) { return peers === 0 ? 'market only' : peers === 1 ? '1 peer' : peers + ' peers'; }
   function catLabel(row) { return row.category || 'Uncategorised'; }
   function chainLine(chains, limit) {
     if (!chains || !chains.length) return 'no chain recorded';
@@ -59,11 +56,10 @@
     return shown.join(', ') + (chains.length > limit ? ' and ' + (chains.length - limit) + ' more' : '');
   }
 
-  /* ------------------------------------------------------------------ reading and writing the address */
+  /* ------------------------------------------------------------------ the address */
 
   function readHash() {
-    var raw = (location.hash || '').replace(/^#/, '');
-    var p = new URLSearchParams(raw);
+    var p = new URLSearchParams((location.hash || '').replace(/^#/, ''));
     state.tab = p.get('tab') || 'board';
     state.q = p.get('q') || '';
     state.cat = p.get('cat') || '*';
@@ -82,14 +78,12 @@
     if (state.sort !== 'rank') p.set('sort', state.sort);
     if (state.slug) p.set('p', state.slug);
     var next = p.toString();
-    var url = location.pathname + location.search + (next ? '#' + next : '');
-    history.replaceState(null, '', url);
+    history.replaceState(null, '', location.pathname + location.search + (next ? '#' + next : ''));
   }
 
   /* ------------------------------------------------------------------ filtering and sorting */
 
   function byRank(a, b) { return a.rank - b.rank; }
-
   var SORTERS = {
     rank: function (a, b) { return a.rank - b.rank; },
     tvl: function (a, b) { return b.tvl_usd - a.tvl_usd || byRank(a, b); },
@@ -129,7 +123,7 @@
     var items = [
       ['Protocols ranked', String(R.meta.board_size), R.meta.watchlist + ' on the watchlist, ' + R.meta.below_floor + ' below the floor'],
       ['Watchlist covered', covered + '/' + R.meta.watchlist, 'every slug the snapshot names'],
-      ['Priced tokens', String(R.meta.with_mcap), 'the peer evidence, of ' + R.meta.token_bearing + ' with a token'],
+      ['Priced tokens', String(R.meta.with_mcap), 'the size curve, of ' + R.meta.token_bearing + ' with a token'],
       ['TVL in scope', usd(R.meta.tvl_in_scope), 'across the rows that record no token']
     ];
     $('facts').innerHTML = items.map(function (it) {
@@ -137,18 +131,25 @@
     }).join('');
   }
 
+  function premiumRange() {
+    var lo = Infinity, hi = 0;
+    CATS.forEach(function (c) { if (c.peers >= 3) { lo = Math.min(lo, c.premium); hi = Math.max(hi, c.premium); } });
+    if (!isFinite(lo)) return '1.00×';
+    return factor(lo) + '–' + factor(hi) + '×';
+  }
+
   function renderFormula() {
     var top = R.rows[0];
     var boxes = [
-      ['The formula', 'TVL × peer × momentum × tenure', 'peer-1, no name special-cased', 'eq'],
-      ['Peer multiple', mult(G.median), 'median of ' + G.peers + ' priced tokens', ''],
-      ['Momentum weight', F.growth_weight.toFixed(2), 'week clipped to ' + F.growth_clip_low + '% … +' + F.growth_clip_high + '%', ''],
+      ['The formula', 'TVL × peer × momentum × tenure', 'peer = size curve × category premium', 'eq'],
+      ['Size curve', 'TVL^' + F.fit.b.toFixed(2), 'fitted on ' + F.fit.n + ' priced tokens', ''],
+      ['Category premium', premiumRange(), 'over the curve, by category', ''],
       ['Tenure ramp', F.tenure_low.toFixed(2) + '–' + F.tenure_high.toFixed(2) + '×', 'over ' + group(F.tenure_days) + ' days with no token', ''],
       ['Rank 1 implied', usd(top.implied_value_usd), top.name + ', from ' + usd(top.tvl_usd), 'out']
     ];
     $('formula').innerHTML = boxes.map(function (b) {
-      return '<div class="' + b[3] + '"><div class="k">' + esc(b[0]) + '</div>' +
-        '<div class="v">' + esc(b[1]) + '</div><em class="c">' + esc(b[2]) + '</em></div>';
+      return '<div class="' + b[3] + '"><div class="k">' + esc(b[0]) + '</div><div class="v">' +
+        esc(b[1]) + '</div><em class="c">' + esc(b[2]) + '</em></div>';
     }).join('');
   }
 
@@ -178,8 +179,7 @@
     if (state.ev !== '*') chips.push('<span class="chip amber">evidence: ' + esc(state.ev === 'deep' ? '10+ peers' : state.ev === 'fair' ? '5 to 9 peers' : 'under 5 peers') + '</span>');
     if (state.tier !== '*') chips.push('<span class="chip grey">' + esc(state.tier === 'watchlist' ? 'house watchlist' : 'below the floor') + '</span>');
     if (state.sort !== 'rank') chips.push('<span class="chip grey">sorted by ' + esc(state.sort === 'age' ? 'time without a token' : state.sort) + '</span>');
-    var text = rows.length + ' of ' + R.rows.length + ' rows';
-    $('status').innerHTML = '<span>Snapshot ' + esc(R.meta.as_of) + ' · ' + esc(text) + '</span>' + chips.join('') +
+    $('status').innerHTML = '<span>Snapshot ' + esc(R.meta.as_of) + ' · ' + rows.length + ' of ' + R.rows.length + ' rows</span>' + chips.join('') +
       '<span class="aside">The ' + R.meta.token_bearing + ' protocols whose record carries a token are shown in Token trades, never scored.</span>';
     $('empty').hidden = rows.length > 0;
     $('empty').textContent = rows.length ? '' : 'No protocol matches that filter. Clear one and the board comes back.';
@@ -242,14 +242,13 @@
     $('tbody').innerHTML = rows.map(function (r) { return renderRow(r, place); }).join('');
   }
 
-  /* ------------------------------------------------------------------ the detail drawer */
+  /* ------------------------------------------------------------------ the detail view */
 
-  function bandDetail(row) {
+  function pin(row) {
     var lo = Math.log10(Math.max(1, row.implied_low_usd));
     var hi = Math.log10(Math.max(row.implied_low_usd + 1, row.implied_high_usd));
     var mid = Math.log10(row.implied_value_usd);
-    var span = hi - lo || 1;
-    return { pin: Math.max(0, Math.min(100, ((mid - lo) / span) * 100)) };
+    return Math.max(0, Math.min(100, ((mid - lo) / (hi - lo || 1)) * 100));
   }
 
   function whySentence(row) {
@@ -260,8 +259,10 @@
     var tenure = row.age_days == null
       ? 'no listing date is recorded, so tenure sits at the neutral ' + F.tenure_unknown.toFixed(2) + '×'
       : track(row.age_days) + ' without a token is ' + f.tenure.toFixed(2) + '× tenure';
-    return usd(row.tvl_usd) + ' TVL × ' + f.peer_multiple.toFixed(2) + '× peer × ' + f.momentum.toFixed(2) +
-      '× momentum × ' + f.tenure.toFixed(2) + '× tenure gives ' + usd(row.implied_value_usd) + ': ' + growth + ', and ' + tenure + '.';
+    var peers = f.peer_peers === 0
+      ? 'the category records no priced token, so its premium is the market\'s own'
+      : 'its category trades ' + factor(f.category_premium) + '× the curve on ' + gradeWord(f.peer_peers);
+    return usd(row.tvl_usd) + ' TVL sits on a size curve of ' + factor(f.size_multiple) + '×, ' + peers + '; ' + growth + ', and ' + tenure + '.';
   }
 
   function stepParts(text) {
@@ -279,11 +280,11 @@
 
   function renderPeers(row) {
     var peers = row.peer_sample || [];
-    if (!peers.length) return '<p class="why">This category records no priced token, so the multiple is the market-wide median.</p>';
-    return '<table class="peers"><thead><tr><th>Token-bearing protocol</th><th>Market cap</th><th>TVL</th><th>mcap / TVL</th></tr></thead><tbody>' +
+    if (!peers.length) return '<p class="why">This category records no priced token, so its premium is the market\'s own.</p>';
+    return '<table class="peers"><thead><tr><th>Token-bearing protocol</th><th>Market cap</th><th>TVL</th><th>mcap / TVL</th><th>vs curve</th></tr></thead><tbody>' +
       peers.map(function (p) {
         return '<tr><td>' + esc(p.name) + '</td><td class="n">' + usd(p.mcap_usd) + '</td><td class="n">' + usd(p.tvl_usd) +
-          '</td><td class="n hi">' + mult(p.mult) + '</td></tr>';
+          '</td><td class="n">' + mult(p.mult) + '</td><td class="n hi">' + factor(p.vs_size) + '×</td></tr>';
       }).join('') + '</tbody></table>';
   }
 
@@ -293,7 +294,6 @@
     if (!row) { closeDetail(); return; }
     state.slug = slug;
     var f = row.factors;
-    var b = bandDetail(row);
     var trophy = row.tier === 'watchlist' ? 'house watchlist' : 'below the $' + Math.round(R.meta.floor_usd / 1e6) + 'M floor';
     var draw = $('drawer');
     draw.innerHTML = '<div class="drawer-in">' +
@@ -306,27 +306,28 @@
       '<div class="drawer-cols"><div class="col">' +
         '<div class="lede"><div class="unit">Implied value if its record stayed as it is</div>' +
           '<strong>' + usd(row.implied_value_usd) + '</strong>' +
-          '<p class="range">Band <b>' + usd(row.implied_low_usd) + '</b> to <b>' + usd(row.implied_high_usd) + '</b> — the same arithmetic at the category\'s 25th and 75th peer multiple.</p>' +
-          '<span class="track"><i></i><u style="left:' + b.pin.toFixed(1) + '%"></u></span>' +
+          '<p class="range">Band <b>' + usd(row.implied_low_usd) + '</b> to <b>' + usd(row.implied_high_usd) + '</b> — the same arithmetic at the category\'s 25th and 75th premium over the curve.</p>' +
+          '<span class="track"><i></i><u style="left:' + pin(row).toFixed(1) + '%"></u></span>' +
         '</div>' +
 
         '<h3>The arithmetic, factor by factor</h3>' +
         '<div class="factors">' +
           '<div class="factor"><span>TVL</span><b>' + usd(row.tvl_usd) + '</b><small>' + esc(chainLine(row.chains, 2)) + '</small></div>' +
-          '<div class="factor"><span>Peer ×</span><b>' + mult(f.peer_multiple) + '</b><small>' + gradeWord(f.peer_peers) + ' in ' + esc(catLabel(row)) + '</small></div>' +
+          '<div class="factor"><span>Peer ×</span><b>' + factor(f.peer_multiple) + '×</b><small>' + factor(f.size_multiple) + '× curve · ' + factor(f.category_premium) + '× category</small></div>' +
           '<div class="factor ' + (f.momentum >= 1 ? 'good' : 'bad') + '"><span>Momentum</span><b>' + f.momentum.toFixed(2) + '×</b><small>' + pct(row.change_7d) + ' this week</small></div>' +
           '<div class="factor"><span>Tenure</span><b>' + f.tenure.toFixed(2) + '×</b><small>' + esc(track(row.age_days)) + ' without a token</small></div>' +
         '</div>' +
-        '<div class="equation">' + exact(row.tvl_usd) + ' × ' + f.peer_multiple.toFixed(4) + ' × ' + f.momentum.toFixed(4) + ' × ' + f.tenure.toFixed(4) + ' = <b>' + exact(row.implied_value_usd) + '</b></div>' +
+        '<div class="equation">' + usd(row.tvl_usd) + ' × ' + factor(f.size_multiple) + ' × ' + factor(f.category_premium) + ' × ' +
+          f.momentum.toFixed(3) + ' × ' + f.tenure.toFixed(3) + ' = <b>' + exact(row.implied_value_usd) + '</b></div>' +
         '<p class="why">' + esc(whySentence(row)) + '</p>' +
 
         '<h3>Peers the market already prices</h3>' +
         renderPeers(row) +
-        '<p class="why">The same function scores every row and no name is special-cased. These token-bearing protocols are the evidence its category multiple is shrunk toward.</p>' +
+        '<p class="why">Every token-bearing protocol is one reading of mcap over TVL, and the column on the right is that reading against the size curve. A category\'s premium is the median of those, shrunk toward the market\'s own, so one odd peer cannot set a value.</p>' +
       '</div><div class="col">' +
-        '<h3>Farm plan: eight steps, each with its cost and its time</h3>' +
+        '<h3>Farm plan: derived from this protocol\'s own record</h3>' +
         renderPlan(row) +
-        '<p class="why">Capital, gas and the hold window come from this protocol\'s own TVL tier and age, so the plan is about this protocol and not a template.</p>' +
+        '<p class="why">The category sets the action and the exit test, the chain sets the wallet and the gas, TVL and the priced-peer count set the size, the week decides the split, and the age decides the season and the hold.</p>' +
         '<p class="caveat"><b>Records no token — not proof it has none.</b> The snapshot is DefiLlama\'s record of ' + esc(R.meta.as_of) +
         ', and a wrapped, staked or bridged product of a protocol whose token already trades is no subject for this radar. Nothing here says a token will be issued.</p>' +
       '</div></div>' +
@@ -353,15 +354,15 @@
     var rows = R.live || [];
     $('live').innerHTML =
       '<div class="panel-head"><div><h2>These tokens already trade</h2>' +
-      '<p>The radar never scores them: their value is the market\'s own market cap, not a model\'s claim. They are shown because they are the reference the model is read from — every multiple beside a board row traces back to a record here.</p></div></div>' +
-      '<div class="live-table"><div class="live-head"><span>Protocol</span><span>Category</span><span class="num">Market cap</span><span class="num">TVL</span><span class="num">mcap / TVL</span><span class="num">7-day TVL</span></div>' +
+      '<p>The radar never scores them: their value is the market\'s own market cap, not a model\'s claim. They are shown because they are the reference the model is read from — the size curve is fitted on these records and every category premium is their median over it.</p></div></div>' +
+      '<div class="live-table"><div class="live-head"><span>Protocol</span><span>Category</span><span class="num">Market cap</span><span class="num">TVL</span><span class="num">mcap / TVL</span><span class="num">vs curve</span></div>' +
       rows.map(function (r) {
         return '<div class="live-row"><div class="who"><b>' + esc(r.name) + '</b><small>' + esc(chainLine(r.chains, 3)) + '</small></div>' +
           '<div class="who"><small>' + esc(r.category || 'Uncategorised') + '</small></div>' +
           '<div class="num-cell">' + usd(r.mcap_usd) + '</div>' +
           '<div class="num-cell">' + usd(r.tvl_usd) + '</div>' +
           '<div class="mult">' + (r.multiple == null ? 'n/a' : mult(r.multiple)) + '</div>' +
-          '<div class="delta ' + (r.change_7d == null ? 'flat' : r.change_7d > 0.05 ? 'up' : r.change_7d < -0.05 ? 'down' : 'flat') + '">' + pct(r.change_7d) + '</div></div>';
+          '<div class="delta ' + (r.vs_size == null ? 'flat' : r.vs_size > 1.05 ? 'up' : r.vs_size < 0.95 ? 'down' : 'flat') + '">' + (r.vs_size == null ? 'n/a' : factor(r.vs_size) + '×') + '</div></div>';
       }).join('') + '</div>';
   }
 
@@ -369,31 +370,33 @@
     var cats = CATS.slice(0, 12);
     $('method').innerHTML =
       '<div class="panel-head"><div><h2>How the implied value is made</h2>' +
-      '<p>One formula scores all ' + R.meta.board_size + ' rows. It is the same function on every protocol and no name is special-cased: the inputs are the snapshot\'s TVL, the snapshot\'s seven-day change and the protocol\'s own listing date.</p></div></div>' +
+      '<p>One formula scores all ' + R.meta.board_size + ' rows, and no name is special-cased: the inputs are the snapshot\'s TVL, its seven-day change and the protocol\'s own listing date. The peer multiple has two parts, both read off the same snapshot.</p></div></div>' +
       '<div class="cards">' +
         '<div class="card wide"><h3>The formula</h3>' +
-          '<p><code>implied = TVL × peer(category) × momentum(7-day) × tenure(age)</code></p>' +
-          '<p>The peer multiple is read off the snapshot itself: ' + G.peers + ' token-bearing protocols record both a market cap and a TVL, and each is one reading of what the market pays per dollar of TVL. The market-wide log-median is ' + mult(G.median) + ', with a 25th percentile of ' + mult(G.p25) + ' and a 75th of ' + mult(G.p75) + '. A category\'s own reading is shrunk toward that median with a weight of ' + F.peer_shrink + ' peers, and held inside ' + mult(G.median / F.peer_band_global) + ' to ' + mult(G.median * F.peer_band_global) + '.</p>' +
-          '<p>Momentum reads the seven-day change, clipped to ' + F.growth_clip_low + '% to +' + F.growth_clip_high + '% and weighted at ' + F.growth_weight + ', so a strong week moves value but cannot decide a rank. Tenure ramps from ' + F.tenure_low + '× at listing to ' + F.tenure_high + '× after ' + group(F.tenure_days) + ' days without a token: a long record is a durable claim, a few weeks is an incentive programme. An unrecorded age takes the neutral ' + F.tenure_unknown + '×.</p></div>' +
+          '<p><code>implied = TVL × peer × momentum × tenure</code>, with <code>peer = size curve(TVL) × category premium</code>.</p>' +
+          '<p><b>The size curve.</b> ' + F.fit.n + ' protocols record both a market cap and a TVL, and each is one reading of mcap over TVL. Regressing ln(mcap/TVL) on ln(TVL) gives a slope of ' + F.fit.b.toFixed(3) + ': the market pays a smaller multiple for a larger TVL, because a billion of TVL is a different claim from fifty million. At this snapshot the curve runs ' + factor(F.fit.a > 0 ? Math.exp(F.fit.a + F.fit.b * Math.log(5e7)) : 0) + '× at $50M and ' + factor(Math.exp(F.fit.a + F.fit.b * Math.log(1e9))) + '× at $1B.</p>' +
+          '<p><b>The category premium.</b> Each priced protocol sits some factor above or below the curve at its own size; a category\'s premium is the median of its own peers\' factors, shrunk toward the market\'s with a weight of ' + F.peer_shrink + ' peers and held inside ' + F.premium_band + '× of it. Seven peers outweigh the market; one does not.</p>' +
+          '<p><b>Momentum and tenure.</b> The week is clipped to ' + F.growth_clip_low + '% to +' + F.growth_clip_high + '% and weighted at ' + F.growth_weight + ', so it moves value but cannot decide a rank. Tenure ramps ' + F.tenure_low + '× to ' + F.tenure_high + '× over ' + group(F.tenure_days) + ' days without a token; an unrecorded age takes the neutral ' + F.tenure_unknown + '×.</p></div>' +
         '<div class="card"><h3>Read off the snapshot</h3><div class="spec">' +
-          'priced tokens <span>' + G.peers + '</span><br>' +
-          'market median <span>' + mult(G.median) + '</span><br>' +
-          '25th percentile <span>' + mult(G.p25) + '</span><br>' +
-          '75th percentile <span>' + mult(G.p75) + '</span><br>' +
+          'priced tokens <span>' + F.fit.n + '</span><br>' +
+          'curve slope <span>' + F.fit.b.toFixed(3) + '</span><br>' +
+          'at $50M <span>' + factor(Math.exp(F.fit.a + F.fit.b * Math.log(5e7))) + '×</span><br>' +
+          'at $1B <span>' + factor(Math.exp(F.fit.a + F.fit.b * Math.log(1e9))) + '×</span><br>' +
+          'market premium <span>' + factor(G.premium) + '×</span><br>' +
           'peer shrink <span>' + F.peer_shrink + '</span><br>' +
           'momentum range <span>' + F.momentum_low + ' to ' + F.momentum_high + '×</span><br>' +
           'tenure ramp <span>' + F.tenure_low + ' to ' + F.tenure_high + '×</span><br>' +
           'rows below the floor <span>' + R.meta.below_floor + '</span></div></div>' +
         '<div class="card"><h3>The split the board keeps</h3>' +
           '<p><b>' + R.meta.token_bearing + '</b> of the snapshot\'s ' + R.meta.protocols + ' protocols record a token; they are never scored and never ranked. <b>' + R.meta.pre_token + '</b> record none, and ' + R.meta.watchlist + ' of those clear the $' + Math.round(R.meta.floor_usd / 1e6) + 'M floor.</p>' +
-          '<p>The board is the floor plus the ' + R.meta.below_floor + ' pre-token protocols under it with the most TVL, because the floor is where the house\'s reading started, not where the radar stops.</p></div>' +
+          '<p>The board is the floor plus the ' + R.meta.below_floor + ' pre-token protocols under it with the most TVL, after the same product rule: a wrapped, staked or bridged product of a token that already trades is not a token still to come.</p></div>' +
         '<div class="card wide"><h3>Categories with the most priced peers</h3>' +
-          '<table class="grid-table"><thead><tr><th>Category</th><th>Peers</th><th>Median multiple</th><th>25th</th><th>75th</th></tr></thead><tbody>' +
+          '<table class="grid-table"><thead><tr><th>Category</th><th>Peers</th><th>Premium over curve</th><th>25th</th><th>75th</th></tr></thead><tbody>' +
           cats.map(function (c) {
-            return '<tr><td>' + esc(c.name) + '</td><td class="n">' + c.peers + '</td><td class="n">' + mult(c.median) + '</td><td class="n">' + mult(c.p25) + '</td><td class="n">' + mult(c.p75) + '</td></tr>';
+            return '<tr><td>' + esc(c.name) + '</td><td class="n">' + c.peers + '</td><td class="n">' + factor(c.premium) + '×</td><td class="n">' + factor(c.p25) + '×</td><td class="n">' + factor(c.p75) + '×</td></tr>';
           }).join('') + '</tbody></table></div>' +
         '<div class="card wide"><h3>Farm plans</h3>' +
-          '<p>Every row carries eight steps: a wallet that holds only farm money, the category\'s own entry action, season registration, a weekly cadence, a hold window from the protocol\'s age, an exit test, claim safety and a written log. Capital, gas and hold time come from the protocol\'s TVL tier and age, so a $1.6B protocol and a $48M protocol get different numbers.</p></div>' +
+          '<p>Every plan is built from the protocol\'s record, not from a template: the category picks the qualifying action and the exit test (a vault deposit, a CDP mint, a delta-neutral pair, a restake and a bridge transfer are five different plans), the first chain picks the wallet and the gas figure, TVL and the priced-peer count pick the position size, the seven-day change decides whether to split the entry, and the age decides whether a points season is plausible and how long the hold is. Steps that do not apply are not written, so plans run from six steps to eleven.</p></div>' +
       '</div>';
   }
 
@@ -403,7 +406,7 @@
     var ok = CHECK.matched === CHECK.total;
     $('foot').innerHTML = '<span>Snapshot <b>' + esc(R.meta.as_of) + '</b> · ' + R.meta.protocols + ' protocols, ' + R.meta.pre_token +
       ' with no token, ' + R.meta.watchlist + ' on the house watchlist · floor ' + exact(R.meta.floor_usd) + '</span>' +
-      '<span><b>peer-1</b> model · every value is the snapshot\'s arithmetic, not a forecast</span>' +
+      '<span><b>peer-2</b> model · every value is the snapshot\'s arithmetic, not a forecast</span>' +
       '<span class="check ' + (ok ? 'ok' : 'bad') + '">' + (ok
         ? 'this page recomputed ' + CHECK.matched + ' of ' + CHECK.total + ' values from their factors: all match'
         : 'this page could not reproduce ' + (CHECK.total - CHECK.matched) + ' of ' + CHECK.total + ' values') + '</span>';
@@ -414,7 +417,7 @@
     for (var i = 0; i < R.rows.length; i++) {
       var r = R.rows[i];
       var f = r.factors;
-      var value = Math.max(1, Math.round(r.tvl_usd * f.peer_multiple * f.momentum * f.tenure));
+      var value = Math.max(1, Math.round(r.tvl_usd * f.size_multiple * f.category_premium * f.momentum * f.tenure));
       if (value === r.implied_value_usd) matched += 1;
     }
     return { matched: matched, total: R.rows.length };
@@ -440,7 +443,7 @@
       ? R.meta.board_size + ' rows · ' + R.meta.watchlist + ' on the watchlist · '
         + (CHECK.matched === CHECK.total ? 'all ' + CHECK.total + ' values recomputed in this page' : 'the page failed to recompute ' + (CHECK.total - CHECK.matched) + ' values')
       : tab === 'live' ? R.live.length + ' token-bearing protocols, at the market\'s own value'
-        : 'peer-1: TVL × peer × momentum × tenure';
+        : 'peer-2: a size curve and a category premium, read off the snapshot';
     if (boardOn) renderBoard();
   }
 
@@ -464,8 +467,7 @@
     $('thead').addEventListener('click', function (e) {
       var key = e.target && e.target.getAttribute && e.target.getAttribute('data-sort');
       if (!key) return;
-      var map = { rank: 'rank', tvl: 'tvl', growth: 'growth', age: 'age', peer: 'peer' };
-      state.sort = map[key];
+      state.sort = key;
       $('sort').value = state.sort;
       rerender();
     });

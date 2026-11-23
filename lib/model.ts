@@ -1,12 +1,13 @@
 // The radar's model: one sealed DefiLlama snapshot in, one ranked board out.
 //
-// The formula, in one line: implied = TVL x peer multiple x momentum x tenure. Every factor comes from
-// the snapshot's own figures -- see DESIGN.md for the reasoning. The reference multiple is read off the
-// snapshot's 128 token-bearing protocols that carry a market cap; no protocol name is ever special-cased,
-// and a protocol whose token already trades is never scored by this model (it is shown at its market cap).
+// implied = TVL x peer multiple x momentum x tenure, and the peer multiple has two parts, both read
+// off the snapshot: a size curve (what the market pays per dollar of TVL at this protocol's size, fitted
+// on every protocol that records both a market cap and a TVL) and a category premium (how far that
+// category's priced protocols sit above or below the curve, shrunk toward the market's own). See
+// DESIGN.md for why the flat market median the first version used was replaced.
 //
-// The board covers every slug in the watchlist, then the pre-token protocols below the watchlist floor
-// with the most TVL: the early rows the radar exists to find.
+// No protocol name is ever special-cased, and a protocol whose token already trades is never scored by
+// this model: it is shown at its market cap in its own view.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -34,13 +35,19 @@ export interface Snapshot {
 /** The model's constants: which of them are read off the data is said beside each. */
 export interface ModelConstants {
   version: string;
-  /** Peers in a category that weigh as much as the market-wide prior (peer shrink k). */
+  /** Peers in a category that weigh as much as the market's own residual (the shrink weight k). */
   peer_shrink: number;
-  /** Ratios outside this band are dropped: the snapshot holds one 400x outlier. */
+  /** Ratios outside this band are dropped before the curve is fitted. */
   ratio_min: number;
   ratio_max: number;
-  /** No category's multiple may stray this factor from the market-wide one. */
-  peer_band_global: number;
+  /** The fitted size curve's slope is clamped here, so one outlier pair cannot invert it. */
+  slope_min: number;
+  slope_max: number;
+  /** A size prior outside this band is a broken fit, not a finding. */
+  prior_min: number;
+  prior_max: number;
+  /** A category's premium over the size curve is held inside this factor of the market's own. */
+  premium_band: number;
   /** Momentum: weight of the seven-day change, its clip, and the factor's own bounds. */
   growth_weight: number;
   growth_clip_low: number;
@@ -55,11 +62,15 @@ export interface ModelConstants {
 }
 
 export const MODEL: ModelConstants = {
-  version: 'peer-1',
+  version: 'peer-2',
   peer_shrink: 5,
   ratio_min: 0.01,
   ratio_max: 40,
-  peer_band_global: 2.8,
+  slope_min: -0.75,
+  slope_max: -0.05,
+  prior_min: 0.005,
+  prior_max: 3,
+  premium_band: 2.8,
   growth_weight: 0.45,
   growth_clip_low: -60,
   growth_clip_high: 150,
@@ -71,17 +82,34 @@ export const MODEL: ModelConstants = {
   tenure_unknown: 0.98,
 };
 
-/** How many pre-token protocols below the floor the early radar adds, by TVL. */
+/**
+ * The categories the house's watchlist rule treats as a product of a token that already trades, and
+ * version markers in a name: the same rule applied below the floor as above it, so the radar never
+ * ranks a wrapped, staked or bridged product as a token still to come.
+ */
+const PRODUCT_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
+const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
+const PRODUCT_NAME = /\b(wrapped|staked|staking)\b/i;
+const EXCHANGE_NAME = /^\s*(binance|coinbase|bybit|kraken|bitget|okx|bitfinex|gemini)/i;
+
+/** How many pre-token protocols below the floor the early radar adds, by TVL, at most. */
 export const EARLY_ROWS = 200;
 
 /** How many token-bearing protocols the "already trades" view carries, by market cap. */
 export const LIVE_ROWS = 24;
 
-/** A market-cap multiple of TVL: the market's own reading of what $1 of TVL is worth in a token. */
-export interface PeerStat {
+/** The market's own size curve: ln(mcap/TVL) against ln(TVL), fitted on every priced protocol. */
+export interface PeerFit {
+  a: number;
+  b: number;
+  n: number;
+}
+
+/** A category's residual over the size curve, in log space, after the shrink toward the market. */
+export interface CategoryPremium {
   peers: number;
-  /** Unshrunk median of ln(ratio), and the shrunk median the model prices with. */
-  median: number;
+  /** exp(median residual): the factor the category trades above or below the curve at its own size. */
+  premium: number;
   p25: number;
   p75: number;
 }
@@ -92,9 +120,11 @@ export interface PeerSample {
   mult: number;
   mcap_usd: number;
   tvl_usd: number;
+  /** The protocol's own multiple over the size curve's multiple at its TVL: 2 means twice the curve. */
+  vs_size: number;
 }
 
-/** One row of board.json. Extra keys are the model's own working, kept so the page can show it. */
+/** One row of board.json. Extra keys are the model's working, kept so the page can show it. */
 export interface BoardRow {
   rank: number;
   slug: string;
@@ -114,11 +144,13 @@ export interface BoardRow {
   implied_low_usd: number;
   implied_high_usd: number;
   factors: {
+    /** The size curve's multiple at this protocol's TVL. */
+    size_multiple: number;
+    /** The category's factor over the curve. */
+    category_premium: number;
+    /** size_multiple x category_premium: the multiple the value is priced with. */
     peer_multiple: number;
     peer_peers: number;
-    peer_median: number;
-    peer_p25: number;
-    peer_p75: number;
     growth_pct: number | null;
     momentum: number;
     tenure: number;
@@ -137,16 +169,16 @@ export interface LiveRow {
   mcap_usd: number | null;
   change_7d: number | null;
   multiple: number | null;
+  vs_size: number | null;
 }
 
-/** A category's peer evidence, for the method page. */
+/** A category's evidence, for the method page. */
 export interface CategoryStat {
   name: string;
   peers: number;
-  median: number;
+  premium: number;
   p25: number;
   p75: number;
-  shrunk: number;
 }
 
 /** Everything the page renders, from the snapshot and the model that scored it. */
@@ -165,7 +197,8 @@ export interface RadarData {
     tvl_in_scope: number;
   };
   model: ModelConstants & {
-    global: { peers: number; median: number; p25: number; p75: number };
+    fit: PeerFit;
+    global: { peers: number; premium: number; p25: number; p75: number };
   };
   categories: CategoryStat[];
   rows: BoardRow[];
@@ -193,7 +226,6 @@ const percentile = (sorted: number[], f: number): number => {
   return sorted[at]!;
 };
 const clamp = (n: number, lo: number, hi: number): number => (n < lo ? lo : n > hi ? hi : n);
-const finite = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 const round = (n: number, places: number): number => {
   const p = 10 ** places;
   return Math.round(n * p) / p;
@@ -213,12 +245,10 @@ export function recordsNoToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
 }
 
-/** The snapshot's own reading of what a token is worth per dollar of TVL, over every token it prices. */
-interface PeerTable {
-  global: PeerStat;
-  byCategory: Map<string, PeerStat>;
-  samples: Map<string, PeerSample[]>;
-  allSamples: PeerSample[];
+/** Whether a protocol is a product of another protocol's token, by the house watchlist's own rule. */
+export function productOfToken(p: SnapshotProtocol): boolean {
+  const category = p.category ?? '';
+  return PRODUCT_CATEGORIES.has(category) || VERSIONED.test(p.name) || PRODUCT_NAME.test(p.name) || EXCHANGE_NAME.test(p.name);
 }
 
 /** ln of a protocol's market-cap-to-TVL ratio, clamped, or null when it holds no usable market cap. */
@@ -227,45 +257,44 @@ function logRatio(p: SnapshotProtocol, model: ModelConstants): number | null {
   return Math.log(clamp(p.mcap_usd / p.tvl_usd, model.ratio_min, model.ratio_max));
 }
 
-/** A category's peers: the log-medians, shrunk toward the market's own and clamped into the peer band. */
-function peerStat(name: string, samples: PeerSample[], global: { median: number; p25: number; p75: number }, model: ModelConstants): PeerStat {
-  const logs = samples.map((s) => Math.log(clamp(s.mult, model.ratio_min, model.ratio_max))).sort((a, b) => a - b);
-  const n = logs.length;
-  const shrink = (own: number, market: number): number => {
-    if (n === 0) return market;
-    const blended = (n * own + model.peer_shrink * market) / (n + model.peer_shrink);
-    const span = Math.log(model.peer_band_global);
-    // Both figures are logarithms of a multiple, so the band is taken around the market's own log.
-    return clamp(blended, market - span, market + span);
-  };
-  const own = { median: median(logs), p25: percentile(logs, 0.25), p75: percentile(logs, 0.75) };
-  const marketLog = { median: Math.log(global.median), p25: Math.log(global.p25), p75: Math.log(global.p75) };
-  return {
-    peers: n,
-    median: Math.exp(shrink(own.median, marketLog.median)),
-    p25: Math.exp(shrink(own.p25, marketLog.p25)),
-    p75: Math.exp(shrink(own.p75, marketLog.p75)),
-  };
+/** The market's size curve: least squares of ln(ratio) on ln(TVL) over every priced protocol. */
+export function fitCurve(points: { x: number; y: number }[], model: ModelConstants): PeerFit {
+  const n = points.length;
+  if (n < 2) return { a: 0, b: 0, n };
+  const mx = points.reduce((s, p) => s + p.x, 0) / n;
+  const my = points.reduce((s, p) => s + p.y, 0) / n;
+  let sxy = 0;
+  let sxx = 0;
+  for (const p of points) {
+    sxy += (p.x - mx) * (p.y - my);
+    sxx += (p.x - mx) ** 2;
+  }
+  const b = sxx === 0 ? 0 : clamp(sxy / sxx, model.slope_min, model.slope_max);
+  return { a: my - b * mx, b, n };
 }
 
-/** The peer table: every token-bearing protocol's multiple, grouped by category, with a sample each. */
-function peerTable(protocols: SnapshotProtocol[], model: ModelConstants): PeerTable {
-  const all: PeerSample[] = [];
-  const groups = new Map<string, PeerSample[]>();
-  for (const p of protocols) {
-    if (logRatio(p, model) === null) continue;
-    const sample: PeerSample = { name: p.name, mult: p.mcap_usd! / p.tvl_usd, mcap_usd: p.mcap_usd!, tvl_usd: p.tvl_usd };
-    all.push(sample);
-    const key = categoryKey(p.category);
-    const bucket = groups.get(key);
-    if (bucket === undefined) groups.set(key, [sample]);
-    else bucket.push(sample);
-  }
-  const logs = all.map((s) => Math.log(clamp(s.mult, model.ratio_min, model.ratio_max))).sort((a, b) => a - b);
-  const global = { median: Math.exp(median(logs)), p25: Math.exp(percentile(logs, 0.25)), p75: Math.exp(percentile(logs, 0.75)) };
-  const byCategory = new Map<string, PeerStat>();
-  for (const [key, samples] of groups) byCategory.set(key, peerStat(key, samples, global, model));
-  return { global: { peers: all.length, median: global.median, p25: global.p25, p75: global.p75 }, byCategory, samples: groups, allSamples: all };
+/** What the market pays per dollar of TVL at this size, from the fitted curve. */
+export function sizePrior(tvl: number, fit: PeerFit, model: ModelConstants): number {
+  if (fit.n < 2) return 1;
+  const x = Math.log(clamp(tvl, 1_000_000, 1_000_000_000_000));
+  return Math.exp(clamp(fit.a + fit.b * x, Math.log(model.prior_min), Math.log(model.prior_max)));
+}
+
+/** One protocol's priced record, as the table and the fit read it. */
+interface Priced {
+  protocol: SnapshotProtocol;
+  mult: number;
+  log: number;
+}
+
+/** The size curve, the priced records, and the category premiums over the curve. */
+interface PeerTable {
+  fit: PeerFit;
+  priced: Priced[];
+  /** The market's own residual quantiles, in log space, and the premium they imply. */
+  global: { peers: number; median: number; p25: number; p75: number; premium: number };
+  byCategory: Map<string, CategoryPremium>;
+  byKey: Map<string, Priced[]>;
 }
 
 /** A category's grouping key: DefiLlama's own name, or a stand-in when it names none. */
@@ -273,12 +302,53 @@ function categoryKey(category: string | null): string {
   return category === null || category.trim() === '' ? 'Uncategorised' : category;
 }
 
+/** The peer table: the size curve fitted on every priced protocol, then each category's premium. */
+function peerTable(protocols: SnapshotProtocol[], model: ModelConstants): PeerTable {
+  const priced: Priced[] = [];
+  for (const p of protocols) {
+    const e = logRatio(p, model);
+    if (e === null) continue;
+    priced.push({ protocol: p, mult: p.mcap_usd! / p.tvl_usd, log: e });
+  }
+  const fit = fitCurve(priced.map((p) => ({ x: Math.log(p.protocol.tvl_usd), y: p.log })), model);
+  const residual = (p: Priced): number => p.log - Math.log(sizePrior(p.protocol.tvl_usd, fit, model));
+  const all = priced.map(residual).sort((a, b) => a - b);
+  const gl = { median: median(all), p25: percentile(all, 0.25), p75: percentile(all, 0.75) };
+  const span = Math.log(model.premium_band);
+  const shrink = (own: number, n: number, market: number): number => {
+    if (n === 0) return market;
+    const blended = (n * own + model.peer_shrink * market) / (n + model.peer_shrink);
+    return clamp(blended, market - span, market + span);
+  };
+  const byKey = new Map<string, Priced[]>();
+  for (const p of priced) {
+    const key = categoryKey(p.protocol.category);
+    const bucket = byKey.get(key);
+    if (bucket === undefined) byKey.set(key, [p]);
+    else bucket.push(p);
+  }
+  const byCategory = new Map<string, CategoryPremium>();
+  for (const [key, bucket] of byKey) {
+    const own = bucket.map(residual).sort((a, b) => a - b);
+    const n = own.length;
+    byCategory.set(key, {
+      peers: n,
+      premium: round(Math.exp(shrink(median(own), n, gl.median)), 6),
+      p25: round(Math.exp(shrink(percentile(own, 0.25), n, gl.p25)), 6),
+      p75: round(Math.exp(shrink(percentile(own, 0.75), n, gl.p75)), 6),
+    });
+  }
+  return { fit, priced, global: { peers: priced.length, ...gl, premium: round(Math.exp(gl.median), 6) }, byCategory, byKey };
+}
+
 /** The three factors and the value they imply for one pre-token protocol. */
 export interface Score {
   implied: number;
   low: number;
   high: number;
-  peer: PeerStat;
+  size: number;
+  premium: number;
+  peers: number;
   growthPct: number | null;
   momentum: number;
   tenure: number;
@@ -286,57 +356,63 @@ export interface Score {
 }
 
 /**
- * The score one protocol gets under the model: TVL x peer multiple x momentum x tenure.
+ * The score one protocol gets under the model: TVL x size curve x category premium x momentum x tenure.
  *
- * The factors are rounded to six places before the product is taken, and the page recomputes the
- * product from the same rounded factors in the same order, so the number on the screen is the number
- * in board.json bit for bit rather than to within a tolerance.
+ * Each factor is rounded to six places before the product, and the page recomputes the product from
+ * the same rounded factors in the same order, so the number on the screen is the number in board.json
+ * bit for bit rather than to within a tolerance.
  */
-export function scoreProtocol(p: SnapshotProtocol, asOf: string, model: ModelConstants, peers: PeerTable): Score {
+export function scoreProtocol(p: SnapshotProtocol, asOf: string, model: ModelConstants, table: PeerTable): Score {
   const age = ageDays(asOf, p.listed_at);
-  const stat = peers.byCategory.get(categoryKey(p.category)) ?? {
-    peers: 0,
-    median: peers.global.median,
-    p25: peers.global.p25,
-    p75: peers.global.p75,
-  };
+  const cat = table.byCategory.get(categoryKey(p.category));
+  const premium = cat === undefined ? table.global.premium : cat.premium;
+  const premiumLow = cat === undefined ? round(Math.exp(table.global.p25), 6) : cat.p25;
+  const premiumHigh = cat === undefined ? round(Math.exp(table.global.p75), 6) : cat.p75;
+  const size = round(sizePrior(p.tvl_usd, table.fit, model), 6);
   const rawGrowth = p.change_7d;
   const clipped = rawGrowth === null ? 0 : clamp(rawGrowth, model.growth_clip_low, model.growth_clip_high);
-  const momentum = clamp(1 + (clipped / 100) * model.growth_weight, model.momentum_low, model.momentum_high);
-  const tenure = age === null ? model.tenure_unknown : model.tenure_low + ((model.tenure_high - model.tenure_low) * Math.min(age, model.tenure_days)) / model.tenure_days;
-  const peerMultiple = round(stat.median, 6);
-  const peerLow = round(stat.p25, 6);
-  const peerHigh = round(stat.p75, 6);
-  const momentumFactor = round(momentum, 6);
-  const tenureFactor = round(tenure, 6);
-  const value = (multiple: number): number => Math.max(1, Math.round(p.tvl_usd * multiple * momentumFactor * tenureFactor));
+  const momentum = round(clamp(1 + (clipped / 100) * model.growth_weight, model.momentum_low, model.momentum_high), 6);
+  const tenure = round(
+    age === null ? model.tenure_unknown : model.tenure_low + ((model.tenure_high - model.tenure_low) * Math.min(age, model.tenure_days)) / model.tenure_days,
+    6,
+  );
+  const value = (multiple: number): number => Math.max(1, Math.round(p.tvl_usd * multiple * momentum * tenure));
   return {
-    implied: value(peerMultiple),
-    low: value(peerLow),
-    high: value(peerHigh),
-    peer: { peers: stat.peers, median: peerMultiple, p25: peerLow, p75: peerHigh },
+    implied: value(size * premium),
+    low: value(size * premiumLow),
+    high: value(size * premiumHigh),
+    size,
+    premium,
+    peers: cat === undefined ? 0 : cat.peers,
     growthPct: rawGrowth,
-    momentum: momentumFactor,
-    tenure: tenureFactor,
+    momentum,
+    tenure,
     age,
   };
 }
 
-/** The token-bearing protocols of a category, closest multiple first, for a row's evidence table. */
-function peerEvidence(peers: PeerTable, category: string | null, target: number, limit: number): PeerSample[] {
-  const own = peers.samples.get(categoryKey(category)) ?? [];
-  const pool = own.length > 0 ? own : peers.allSamples;
-  const distance = (s: PeerSample): number => Math.abs(Math.log(clamp(s.mult, 0.01, 40)) - Math.log(target));
+/** The priced protocols of a category, closest to this row's premium first, for its evidence table. */
+function peerEvidence(table: PeerTable, category: string | null, target: number, model: ModelConstants, limit: number): PeerSample[] {
+  const own = table.byKey.get(categoryKey(category)) ?? [];
+  const pool = own.length > 0 ? own : table.priced;
+  const vsSize = (p: Priced): number => Math.exp(p.log - Math.log(sizePrior(p.protocol.tvl_usd, table.fit, model)));
+  const distance = (p: Priced): number => Math.abs(Math.log(vsSize(p)) - Math.log(target));
   return pool
     .slice()
-    .sort((a, b) => distance(a) - distance(b) || a.mult - b.mult || bySlugOrder(a.name, b.name))
+    .sort((a, b) => distance(a) - distance(b) || a.log - b.log || bySlugOrder(a.protocol.slug, b.protocol.slug))
     .slice(0, limit)
-    .map((s) => ({ name: s.name, mult: round(s.mult, 4), mcap_usd: s.mcap_usd, tvl_usd: s.tvl_usd }));
+    .map((p) => ({
+      name: p.protocol.name,
+      mult: round(p.mult, 4),
+      mcap_usd: p.protocol.mcap_usd ?? 0,
+      tvl_usd: p.protocol.tvl_usd,
+      vs_size: round(vsSize(p), 2),
+    }));
 }
 
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
-  const peers = peerTable(snapshot.protocols, model);
+  const table = peerTable(snapshot.protocols, model);
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
   const tier = new Map<string, 'watchlist' | 'below-floor'>();
@@ -347,10 +423,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     chosen.set(slug, p);
     tier.set(slug, 'watchlist');
   }
-  // The early radar: pre-token protocols under the floor, by TVL. Never less than enough to clear the
-  // gate's 100-row minimum, and never so many that the page cannot show a useful board.
+  // The early radar: pre-token protocols under the floor with the most TVL, minus the wrapped, staked,
+  // bridged and versioned products the house's own rule keeps off the watchlist above the floor.
   const early = snapshot.protocols
-    .filter((p) => !chosen.has(p.slug) && recordsNoToken(p) && p.tvl_usd < snapshot.floor_usd)
+    .filter((p) => !chosen.has(p.slug) && recordsNoToken(p) && !productOfToken(p) && p.tvl_usd < snapshot.floor_usd)
     .sort((a, b) => b.tvl_usd - a.tvl_usd || bySlugOrder(a.slug, b.slug))
     .slice(0, EARLY_ROWS);
   for (const p of early) {
@@ -358,7 +434,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     tier.set(p.slug, 'below-floor');
   }
 
-  const scored = [...chosen.values()].map((p) => ({ p, score: scoreProtocol(p, snapshot.as_of, model, peers) }));
+  const scored = [...chosen.values()].map((p) => ({ p, score: scoreProtocol(p, snapshot.as_of, model, table) }));
   scored.sort((a, b) => b.score.implied - a.score.implied || bySlugOrder(a.p.slug, b.p.slug));
   return scored.map(({ p, score }, i) => ({
     rank: i + 1,
@@ -379,49 +455,53 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     implied_low_usd: score.low,
     implied_high_usd: score.high,
     factors: {
-      peer_multiple: round(score.peer.median, 6),
-      peer_peers: score.peer.peers,
-      peer_median: round(score.peer.median, 6),
-      peer_p25: round(score.peer.p25, 6),
-      peer_p75: round(score.peer.p75, 6),
+      size_multiple: score.size,
+      category_premium: score.premium,
+      peer_multiple: round(score.size * score.premium, 6),
+      peer_peers: score.peers,
       growth_pct: score.growthPct === null ? null : round(score.growthPct, 4),
-      momentum: round(score.momentum, 6),
-      tenure: round(score.tenure, 6),
+      momentum: score.momentum,
+      tenure: score.tenure,
     },
-    farm_steps: farmPlan(p, score.age, score.peer),
-    peer_sample: peerEvidence(peers, p.category, score.peer.median, 3),
+    farm_steps: farmPlan(p, score.age, score.peers).map(stepText),
+    peer_sample: peerEvidence(table, p.category, score.premium, model, 3),
   }));
 }
 
 /** The token-bearing protocols the page shows beside the board, at the market's own value. */
-export function liveRows(snapshot: Snapshot): LiveRow[] {
+export function liveRows(snapshot: Snapshot, model: ModelConstants = MODEL): LiveRow[] {
+  const table = peerTable(snapshot.protocols, model);
   return snapshot.protocols
     .filter((p) => !recordsNoToken(p) && p.mcap_usd !== null && p.mcap_usd > 0)
     .sort((a, b) => b.mcap_usd! - a.mcap_usd! || bySlugOrder(a.slug, b.slug))
     .slice(0, LIVE_ROWS)
-    .map((p) => ({
-      slug: p.slug,
-      name: p.name,
-      category: p.category,
-      chains: p.chains,
-      tvl_usd: p.tvl_usd,
-      mcap_usd: p.mcap_usd,
-      change_7d: p.change_7d,
-      multiple: p.tvl_usd > 0 ? round(p.mcap_usd! / p.tvl_usd, 4) : null,
-    }));
+    .map((p) => {
+      const size = sizePrior(p.tvl_usd, table.fit, model);
+      return {
+        slug: p.slug,
+        name: p.name,
+        category: p.category,
+        chains: p.chains,
+        tvl_usd: p.tvl_usd,
+        mcap_usd: p.mcap_usd,
+        change_7d: p.change_7d,
+        multiple: p.tvl_usd > 0 ? round(p.mcap_usd! / p.tvl_usd, 4) : null,
+        vs_size: p.tvl_usd > 0 && size > 0 ? round(p.mcap_usd! / p.tvl_usd / size, 2) : null,
+      };
+    });
 }
 
 /** The categories with the most peers, for the method page's evidence table. */
-function categoryStats(peers: PeerTable): CategoryStat[] {
-  return [...peers.byCategory.entries()]
-    .map(([name, stat]) => ({ name, peers: stat.peers, median: round(stat.median, 4), p25: round(stat.p25, 4), p75: round(stat.p75, 4), shrunk: round(stat.median, 4) }))
+function categoryStats(table: PeerTable): CategoryStat[] {
+  return [...table.byCategory.entries()]
+    .map(([name, c]) => ({ name, peers: c.peers, premium: c.premium, p25: c.p25, p75: c.p75 }))
     .sort((a, b) => b.peers - a.peers || bySlugOrder(a.name, b.name));
 }
 
 /** Everything the dashboard renders. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, model);
-  const peers = peerTable(snapshot.protocols, model);
+  const table = peerTable(snapshot.protocols, model);
   const preToken = snapshot.protocols.filter(recordsNoToken).length;
   const tokenBearing = snapshot.protocols.length - preToken;
   const radar: RadarData = {
@@ -432,18 +512,70 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       protocols: snapshot.protocols.length,
       pre_token: preToken,
       token_bearing: tokenBearing,
-      with_mcap: peers.global.peers,
+      with_mcap: table.global.peers,
       watchlist: snapshot.watchlist.length,
       board_size: board.length,
       below_floor: board.filter((r) => r.tier === 'below-floor').length,
       tvl_in_scope: board.reduce((n, r) => n + r.tvl_usd, 0),
     },
-    model: { ...model, global: peers.global },
-    categories: categoryStats(peers),
+    model: { ...model, fit: table.fit, global: { peers: table.global.peers, premium: table.global.premium, p25: round(Math.exp(table.global.p25), 6), p75: round(Math.exp(table.global.p75), 6) } },
+    categories: categoryStats(table),
     rows: board,
-    live: liveRows(snapshot),
+    live: liveRows(snapshot, model),
   };
   return { board, radar };
+}
+
+// ------------------------------------------------------------------ farm plans
+
+/** The chain's fee token, for the wallet and gas lines of a plan. */
+const NATIVE: Record<string, string> = {
+  Ethereum: 'ETH', Arbitrum: 'ETH', Base: 'ETH', Optimism: 'ETH', 'zkSync Era': 'ETH', Linea: 'ETH', Scroll: 'ETH', Ink: 'ETH',
+  Mantle: 'ETH', 'World Chain': 'ETH', Unichain: 'ETH', Katana: 'ETH', Hemi: 'ETH', BOB: 'ETH', Morph: 'ETH', 'Plume Mainnet': 'ETH',
+  Binance: 'BNB', Solana: 'SOL', Polygon: 'POL', Tron: 'TRX', Avalanche: 'AVAX', Sui: 'SUI', Aptos: 'APT', Bitcoin: 'BTC',
+  Stacks: 'STX', Stellar: 'XLM', Algorand: 'ALGO', Flare: 'FLR', Sonic: 'S', Berachain: 'BERA', Monad: 'MON', Plasma: 'XPL',
+  'Hyperliquid L1': 'HYPE', Bittensor: 'TAO', Mezo: 'BTC', BSquared: 'BTC', Noble: 'USDC', Ripple: 'XRP', 'XRPL EVM': 'XRP',
+  Pharos: 'PROS', Arc: 'USDC', Ronin: 'RON', Kava: 'KAVA', Manta: 'MANTA', Corn: 'BTC', Citrea: 'cBTC', Sei: 'SEI',
+  'Fluent': 'ETH', Stable: 'USDT0', Tempo: 'USD', Provenance: 'HASH', 'Reya Network': 'ETH', 'Rise': 'ETH', 'Morph': 'ETH',
+};
+
+/** One action's gas estimate by chain: what a deposit, a borrow or a swap costs, roughly. */
+const GAS: Record<string, number> = {
+  Ethereum: 8, Arbitrum: 2, Base: 2, Optimism: 2, 'zkSync Era': 2, Linea: 3, Scroll: 3, Ink: 2, Mantle: 1, 'World Chain': 2,
+  Unichain: 2, Katana: 2, Hemi: 3, BOB: 3, Binance: 2, Solana: 1, Polygon: 1, Tron: 2, Avalanche: 2, Sui: 1, Aptos: 2,
+  Bitcoin: 6, Stacks: 3, Stellar: 1, Algorand: 1, Flare: 1, Sonic: 2, Berachain: 2, Monad: 2, Plasma: 2,
+  'Hyperliquid L1': 1, Bittensor: 1, Mezo: 3, BSquared: 3, Noble: 2, Ripple: 2, 'XRPL EVM': 2, Pharos: 2, Arc: 2,
+  Ronin: 1, Kava: 2, Manta: 2, Corn: 3, Citrea: 3, Sei: 2, Fluent: 2, Stable: 2, Tempo: 2, Provenance: 2, 'Reya Network': 2,
+};
+
+/** A chain whose fees and liquidity a reader usually has a wallet for already. */
+const HOME_CHAINS = new Set(['Ethereum', 'Solana', 'Base', 'Arbitrum', 'Optimism', 'Polygon']);
+
+/** The family of action a category actually asks for. */
+type Family =
+  | 'lending' | 'cdp' | 'dex' | 'vault' | 'curator' | 'rwa' | 'basis' | 'perp' | 'restake' | 'stake'
+  | 'chain' | 'bridge' | 'insurance' | 'payments' | 'stable' | 'prediction' | 'index' | 'privacy' | 'generic';
+
+function familyOf(category: string | null): Family {
+  const c = (category ?? '').toLowerCase();
+  if (c.includes('cdp') || c.includes('stablecoin wrapper') || c.includes('dual-token')) return 'cdp';
+  if (c.includes('lend') || c.includes('collateral') || c.includes('credit')) return 'lending';
+  if (c.includes('risk curator') || c.includes('allocator') || c.includes('curator') || c.includes('liquidity manager')) return 'curator';
+  if (c.includes('rwa') || c.includes('anchor btc') || c.includes('decentralized btc')) return 'rwa';
+  if (c.includes('basis')) return 'basis';
+  if (c.includes('perpetual') || c.includes('derivative') || c.includes('option')) return 'perp';
+  if (c.includes('restak')) return 'restake';
+  if (c.includes('staking') || c.includes('governance')) return 'stake';
+  if (c.includes('dex') || c.includes('leveraged farm')) return 'dex';
+  if (c.includes('yield') || c.includes('farm') || c.includes('index')) return c.includes('index') ? 'index' : 'vault';
+  if (c === 'chain') return 'chain';
+  if (c.includes('bridge')) return 'bridge';
+  if (c.includes('insurance')) return 'insurance';
+  if (c.includes('payment') || c.includes('card')) return 'payments';
+  if (c.includes('predict')) return 'prediction';
+  if (c.includes('privacy')) return 'privacy';
+  if (c.includes('cex') || c.includes('cedefi')) return 'generic';
+  return 'generic';
 }
 
 /** A whole-dollars figure for a sentence: grouped by thousands, never by the host's locale. */
@@ -457,21 +589,21 @@ function dollars(n: number): string {
   return `$${out}`;
 }
 
-/** How much capital one farm position needs, from the protocol's own TVL. */
-export function capitalFor(tvl: number): number {
-  if (tvl >= 5_000_000_000) return 250;
-  if (tvl >= 1_000_000_000) return 150;
-  if (tvl >= 250_000_000) return 120;
-  if (tvl >= 100_000_000) return 100;
-  if (tvl >= 50_000_000) return 75;
-  return 50;
+/** One step of a farm plan: the action, what it costs and how long it takes. */
+interface FarmStep {
+  text: string;
+  cost: string;
+  time: string;
 }
 
-/** The gas one action costs on a chain of this protocol's size: a round number, stated as an estimate. */
-function gasFor(tvl: number): number {
-  if (tvl >= 1_000_000_000) return 8;
-  if (tvl >= 100_000_000) return 5;
-  return 3;
+/**
+ * How much capital one position needs: the protocol's TVL sets the tier, and the quality of the
+ * evidence sets the fraction, because a category with no priced peer is a weaker claim.
+ */
+export function capitalFor(tvl: number, peers: number): number {
+  const tier = tvl >= 5_000_000_000 ? 300 : tvl >= 1_000_000_000 ? 250 : tvl >= 250_000_000 ? 200 : tvl >= 100_000_000 ? 150 : tvl >= 50_000_000 ? 120 : 100;
+  const share = peers === 0 ? 0.6 : peers < 3 ? 0.75 : peers < 5 ? 0.85 : 1;
+  return Math.max(25, Math.round((tier * share) / 10) * 10);
 }
 
 /** How long to hold, from the protocol's age: a young protocol needs more than one snapshot to count. */
@@ -482,55 +614,197 @@ export function holdDaysFor(age: number | null): number {
   return 30;
 }
 
-/** The weekly cadence's length: a season, longer for a protocol with no season yet. */
+/** The weekly cadence a season rewards: longer where the record is young and a season may still run. */
 function weeksFor(age: number | null): number {
-  return age === null || age < 240 ? 12 : 8;
+  if (age === null) return 10;
+  if (age < 240) return 12;
+  if (age < 730) return 9;
+  return 6;
 }
 
-/** The category's one entry action, in the words a farmer can follow, with its cost and its time. */
-export function entryAction(name: string, category: string | null, chain: string, capital: number, gas: number): string {
-  const c = (category ?? '').toLowerCase();
-  const base = `Deposit ${dollars(capital)} of USDC into ${name} on ${chain} through its own app and keep the position open.`;
-  const tail = ` Cost: ${dollars(capital)} of capital plus about ${dollars(gas)} of gas. Time: 25 minutes.`;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply ${dollars(capital)} of USDC to ${name} on ${chain} and borrow a stablecoin against at most half of it.${tail}`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Provide ${dollars(capital)} of liquidity to ${name}'s deepest pool on ${chain} and keep the LP tokens in the depositing wallet.${tail}`;
-  if (c.includes('risk curator') || c.includes('allocator') || c.includes('curator')) return `Deposit ${dollars(capital)} into one ${name} vault on ${chain} and keep the vault shares in the depositing wallet.${tail}`;
-  if (c.includes('rwa')) return `Buy or mint ${dollars(capital)} of ${name}'s yield asset on ${chain} and hold it in the wallet that bought it.${tail}`;
-  if (c.includes('basis')) return `Fund ${dollars(capital)} with ${name} on ${chain} and run one small delta-neutral or basis position to qualify.${tail}`;
-  if (c.includes('restak')) return `Restake ${dollars(capital)} of ${chain}'s staking asset through ${name} and keep the receipt token.${tail}`;
-  if (c.includes('staking') || c.includes('governance')) return `Stake ${dollars(capital)} of ${chain}'s staking asset with ${name} and vote on at least one open proposal.${tail}`;
-  if (c.includes('chain')) return `Bridge ${dollars(capital)} of USDC onto ${name} through its own bridge and deposit the funds in an app on that chain.${tail}`;
-  if (c.includes('insurance')) return `Buy ${dollars(capital)} of cover from ${name} on ${chain} and keep the policy for its full term.${tail}`;
-  if (c.includes('payment')) return `Send ${dollars(capital)} through ${name} on ${chain} in a few separate payments and keep every receipt.${tail}`;
-  if (c.includes('stable')) return `Mint the stable asset ${name} issues against ${dollars(capital)} of collateral on ${chain} and hold it.${tail}`;
-  if (c.includes('perpetual') || c.includes('derivative') || c.includes('option')) return `Deposit ${dollars(capital)} of USDC as margin on ${name} and open one small hedge to qualify.${tail}`;
-  if (c.includes('predict')) return `Fund ${dollars(capital)} on ${name} and take one position in a market you understand.${tail}`;
-  if (c.includes('bridge')) return `Bridge ${dollars(capital)} of USDC to ${chain} through ${name} and use the funds in its app.${tail}`;
-  return `${base}${tail}`;
+/** The family's entry action: the thing the protocol actually counts, with its own cost and time. */
+function entryStep(family: Family, name: string, chain: string, cap: number, gas: number): FarmStep {
+  const fee = dollars(cap);
+  const small = dollars(Math.round(cap / 3));
+  const half = dollars(Math.round(cap / 2));
+  switch (family) {
+    case 'lending':
+      return { text: `Supply ${fee} of USDC to ${name} on ${chain}, then borrow about ${half} against it and keep the loan open, so the wallet counts as both a supplier and a borrower.`, cost: `${fee} of collateral plus about ${dollars(gas * 2)} of ${chain} gas`, time: '25 minutes' };
+    case 'cdp':
+      return { text: `Open a ${name} vault on ${chain}, deposit ${fee} of USDC as collateral, and mint at most ${small} of its stable asset against it rather than the maximum.`, cost: `${fee} locked as collateral plus about ${dollars(gas * 2)} of gas`, time: '30 minutes' };
+    case 'dex':
+      return { text: `Add ${fee} of liquidity to ${name}'s deepest pool on ${chain} in a range within about 15% of the current price, then route one small swap through the same pool each week.`, cost: `${fee} in the pool, with impermanent loss if the pair moves`, time: '30 minutes' };
+    case 'vault':
+      return { text: `Deposit ${fee} into one ${name} vault on ${chain} and leave it there for the whole plan; check the vault's fee and its largest allocation before you deposit.`, cost: `${fee} plus about ${dollars(gas * 2)} of gas, and the vault's own fee`, time: '20 minutes' };
+    case 'curator':
+      return { text: `Deposit ${fee} into a single ${name} vault on ${chain}, after reading the curator's fee, the vault's cap and its largest borrower, since the curator's book is the risk you take.`, cost: `${fee} plus about ${dollars(gas * 2)} of gas and the curator's fee`, time: '30 minutes' };
+    case 'rwa':
+      return { text: `Buy ${fee} of ${name}'s yield asset on ${chain} and hold it in the wallet that bought it; check the redemption window and the issuer before you size it.`, cost: `${fee} plus about ${dollars(gas * 2)} of gas`, time: '20 minutes' };
+    case 'basis':
+      return { text: `Put on one small delta-neutral position through ${name} on ${chain}: spot on one leg, the perp on the other, so both sides are live at the same time.`, cost: `${fee} of margin plus about ${dollars(gas * 3)} of gas on two legs`, time: '35 minutes' };
+    case 'perp':
+      return { text: `Deposit ${fee} of USDC as margin on ${name}, open one small hedge, and keep it open across at least three funding intervals without adding size.`, cost: `${fee} at risk as margin plus about ${dollars(gas * 2)} of gas`, time: '30 minutes' };
+    case 'restake':
+      return { text: `Restake about ${fee} of ${chain}'s staking asset through ${name} and keep the receipt token in the same wallet rather than selling it.`, cost: `${fee} of the staking asset plus about ${dollars(gas * 2)} of gas`, time: '20 minutes' };
+    case 'stake':
+      return { text: `Stake about ${fee} of ${chain}'s native asset with ${name} and vote on at least one open proposal from the same wallet.`, cost: `${fee} staked plus about ${dollars(gas * 2)} of gas`, time: '20 minutes' };
+    case 'chain':
+      return { text: `Bridge ${fee} of USDC onto ${name} through its own bridge and deploy it in a lending app on that chain, so both the bridge and the app record the wallet.`, cost: `${fee} plus about ${dollars(gas * 2)} of gas on two sides`, time: '35 minutes' };
+    case 'bridge':
+      return { text: `Bridge ${fee} of USDC to ${chain} through ${name} and use the funds in an app on the far side instead of letting them sit in the bridge.`, cost: `${fee} plus about ${dollars(gas * 2)} of gas on two sides`, time: '30 minutes' };
+    case 'insurance':
+      return { text: `Buy ${fee} of cover from ${name} on ${chain} and keep the policy to its full term, since a cancelled policy usually scores nothing.`, cost: `the premium on ${fee} of cover`, time: '15 minutes' };
+    case 'payments':
+      return { text: `Route ${fee} of USDC through ${name} on ${chain} in four separate payments over a month and keep each receipt.`, cost: `${fee} moved plus about ${dollars(gas * 4)} of gas in all`, time: '15 minutes a month' };
+    case 'stable':
+      return { text: `Mint ${name}'s stable asset against ${fee} of collateral on ${chain} and hold the minted asset, so both the collateral and the supply side show in the wallet.`, cost: `${fee} of collateral plus about ${dollars(gas * 2)} of gas`, time: '25 minutes' };
+    case 'prediction':
+      return { text: `Fund ${fee} on ${name} and take positions in three separate markets over a month, including at least one market that settles within the week.`, cost: `${fee} at risk across the positions`, time: '20 minutes a week' };
+    case 'index':
+      return { text: `Buy ${fee} of ${name}'s index token on ${chain} and hold it in the buying wallet instead of rebalancing it yourself.`, cost: `${fee} plus about ${dollars(gas)} of gas`, time: '15 minutes' };
+    case 'privacy':
+      return { text: `Deposit ${fee} of USDC through ${name}'s shielded pool on ${chain}, withdraw part of it a week later, and keep the withdrawal notes.`, cost: `${fee} plus about ${dollars(gas * 3)} of gas on two transactions`, time: '20 minutes' };
+    default:
+      return { text: `Deposit ${fee} of USDC into ${name} on ${chain} through its own app and keep the position open for the whole plan.`, cost: `${fee} plus about ${dollars(gas * 2)} of gas`, time: '20 minutes' };
+  }
+}
+
+/** The family's exit test: what a reader must prove works before the money is committed. */
+function exitStep(family: Family, name: string, chain: string, gas: number): FarmStep {
+  const g = dollars(gas);
+  switch (family) {
+    case 'lending':
+      return { text: `Before you rely on it, repay the borrowed leg and withdraw a small part of the supply once; interest accrues second by second, so repay the debt first.`, cost: `about ${g} of gas for the round trip`, time: '20 minutes' };
+    case 'cdp':
+      return { text: `Prove the exit first: repay the minted debt and only then withdraw collateral, because a vault that is liquidated while you withdraw loses the whole position.`, cost: `about ${g} of gas for both transactions`, time: '20 minutes' };
+    case 'dex':
+      return { text: `Withdraw a small slice of the liquidity once and read how much of each token comes back; that gap is impermanent loss, and it is the real cost of the position.`, cost: `about ${g} of gas for the round trip`, time: '15 minutes' };
+    case 'vault':
+    case 'curator':
+      return { text: `Withdraw a small amount once and check that the shares redeem at the price the app showed; a vault with a queue or a lock-up will say so only at that moment.`, cost: `about ${g} of gas for the round trip`, time: '20 minutes' };
+    case 'rwa':
+      return { text: `Read the redemption terms before buying: how many days the issuer takes to pay out, and whether redemption is in kind or in cash.`, cost: 'nothing to read', time: '15 minutes' };
+    case 'basis':
+    case 'perp':
+      return { text: `Close both legs once on a small position to prove the exit; on a perp venue, the liquidation price moves with the funding rate.`, cost: `about ${dollars(gas * 3)} of gas and the spread on both legs`, time: '20 minutes' };
+    case 'restake':
+    case 'stake':
+      return { text: `Read the unbonding period before staking: the asset is locked for that long, which is usually longer than the farm itself.`, cost: 'nothing to check', time: '10 minutes' };
+    case 'chain':
+    case 'bridge':
+      return { text: `Test the return path with a small amount before the full deposit: bridge fees and wait times are not symmetric, and the way back can take longer.`, cost: `about ${dollars(gas * 2)} of gas for the test`, time: '30 minutes' };
+    default:
+      return { text: `Withdraw a small amount once to prove the exit works and that the app does not hold withdrawals behind a queue.`, cost: `about ${g} of gas for the round trip`, time: '20 minutes' };
+  }
 }
 
 /**
- * A protocol's farm plan: eight steps, each with its action, its cost and its time, derived from the
- * protocol's own record -- category, first chain, TVL tier, age -- so no two protocols get the same
- * sentences from a hand-written list of names.
+ * A protocol's farm plan, derived from its own record: the category decides the qualifying action and
+ * its exit test, the first chain decides the wallet and the gas, the TVL tier and the priced-peer count
+ * decide the position size, the seven-day change decides whether to split the entry, and the age decides
+ * whether a points season is plausible and how long the hold must be. The steps that do not apply are
+ * not written, so plans run from a few steps on an old, quiet protocol to a dozen on a young one that
+ * needs a bridge, a cadence and a hold.
  */
-export function farmPlan(p: SnapshotProtocol, age: number | null, peer: PeerStat): string[] {
+export function farmPlan(p: SnapshotProtocol, age: number | null, peers: number): FarmStep[] {
   const chain = p.chains.length > 0 ? p.chains[0]! : 'its main chain';
-  const capital = capitalFor(p.tvl_usd);
-  const gas = gasFor(p.tvl_usd);
+  const native = NATIVE[chain] ?? 'the chain\'s own fee token';
+  const gas = GAS[chain] ?? 4;
+  const cap = capitalFor(p.tvl_usd, peers);
   const hold = holdDaysFor(age);
-  const weeks = weeksFor(age);
-  const thin = peer.peers < 5;
-  return [
-    `Open a wallet on ${chain} that holds only farm money and fund it with ${dollars(capital)} of USDC and ${dollars(gas)} of gas; never reuse a wallet that holds savings. Cost: ${dollars(capital)} of capital plus about ${dollars(gas)} of gas. Time: 10 minutes.`,
-    entryAction(p.name, p.category, chain, capital, gas),
-    `Check whether ${p.name} runs a points season or a waitlist and join it with this wallet before the first deposit, because a program usually scores from the day the wallet joins. Cost: nothing, and never buy an invite from a third party. Time: 10 minutes.`,
-    `Repeat one qualifying action each week -- a deposit, a borrow, a swap or a vote -- for ${weeks} weeks, since programs weigh weekly activity more than a single large deposit. Cost: about ${dollars(gas)} of gas a week. Time: 15 minutes a week.`,
-    `Keep the position open for at least ${hold} days so it appears in more than one monthly snapshot of the protocol's TVL. Cost: the ${dollars(capital)} stays locked, and closing early can cut the score. Time: ${hold} days.`,
-    `Test the exit before you trust the deposit: withdraw a small amount once, keep ${dollars(gas)} of gas back, and approve only the allowance the app needs${thin ? '; this category has few priced peers, so size the position smaller than usual' : ''}. Cost: about ${dollars(gas)} of gas for the test. Time: 20 minutes.`,
-    `Watch only ${p.name}'s own site or app for a launch or a claim notice, and never pay a fee or sign a permit to claim a token. Cost: no fee to claim, ever. Time: 10 minutes a week.`,
-    `Write the wallet, every transaction hash, the deposit date and the position's value in a farm log so the position can be repeated or unwound without guesswork. Cost: nothing beyond the log. Time: 5 minutes a week.`,
-  ];
+  const steps: FarmStep[] = [];
+
+  steps.push({
+    text: `Open a fresh wallet on ${chain} funded with ${dollars(cap)} of USDC and about ${dollars(gas * 3)} of ${native} for fees, keep its seed offline, and fund it from an exchange rather than a wallet that holds savings.`,
+    cost: `${dollars(cap)} of capital plus about ${dollars(gas * 3)} of ${native}`,
+    time: '10 minutes',
+  });
+
+  if (p.chains.length >= 5) {
+    steps.push({
+      text: `${p.name} counts TVL on ${p.chains.length} chains. Pick one of them for the whole position instead of spreading it, because a farm that is split across chains usually scores on none of them.`,
+      cost: 'nothing to choose, and it saves a bridge fee', time: '10 minutes',
+    });
+  }
+  if (!HOME_CHAINS.has(chain)) {
+    steps.push({
+      text: `Bridge the ${dollars(cap)} to ${chain} from a chain you already use, and keep about ${dollars(gas)} of its own fee token on both sides so the return trip is not stuck.`,
+      cost: 'about 0.1% bridge fee plus a few dollars of gas on each side', time: '15 to 40 minutes, depending on the bridge',
+    });
+  }
+
+  steps.push(entryStep(familyOf(p.category), p.name, chain, cap, gas));
+
+  if (p.change_7d !== null && p.change_7d <= -10) {
+    steps.push({
+      text: `Its TVL fell ${Math.abs(p.change_7d).toFixed(1)}% this week. Enter in two halves a week apart rather than all at once, and check that the app's withdrawals work before the second half goes in.`,
+      cost: 'nothing extra, and it costs one week of time', time: 'one week between the halves',
+    });
+  } else if (p.change_7d !== null && p.change_7d >= 300) {
+    steps.push({
+      text: `Its TVL jumped ${p.change_7d >= 1000 ? 'more than 1,000' : Math.round(p.change_7d)}% this week, which is an incentive launch or a migration rather than organic demand. Enter the smaller half now and expect the TVL to fall back before it grows again.`,
+      cost: 'half the position up front', time: 'about a week to see whether the TVL holds',
+    });
+  } else if (p.change_7d !== null && p.change_7d >= 25) {
+    steps.push({
+      text: `Its TVL rose ${p.change_7d.toFixed(1)}% this week, which usually means an incentive has just started and the qualifying bar is rising with the crowd. Enter now rather than waiting for a better week.`,
+      cost: 'nothing extra', time: 'the entry day',
+    });
+  }
+
+  const season = age === null ? 'unknown' : age < 120 ? 'new' : age < 1095 ? 'live' : 'old';
+  if (season !== 'old') {
+    steps.push({
+      text: season === 'new'
+        ? `${p.name} is ${age} days into DefiLlama's record, so a first season is likely to open rather than to have closed. Register the wallet in its app before the first deposit.`
+        : `Check ${p.name}'s own app for a live season or points page and register this wallet before the first deposit, because a program usually scores from the day the wallet joins.`,
+      cost: 'nothing, and never buy an invite from a third party', time: '10 minutes',
+    });
+    const weeks = weeksFor(age);
+    const heavy = gas >= 6;
+    steps.push(heavy
+      ? {
+        text: `Then make a qualifying action every two weeks for ${weeks} weeks, with two actions per visit; a program counts a wallet that keeps coming back, and batching the actions keeps gas under the position's size on ${chain}.`,
+        cost: `about ${dollars(gas * 2)} of gas every two weeks`, time: `${weeks} weeks, 20 minutes every two weeks`,
+      }
+      : {
+        text: `Then make one qualifying action each week for ${weeks} weeks; a program weighs a wallet that acts weekly more than one large deposit on a single day.`,
+        cost: `about ${dollars(gas)} of gas a week`, time: `${weeks} weeks, 15 minutes each`,
+      });
+  }
+
+  steps.push({
+    text: `Keep the position open for at least ${hold} days so it appears in more than one monthly snapshot of the protocol's TVL.`,
+    cost: `the ${dollars(cap)} stays locked, and closing early can cut the score`, time: `${hold} days`,
+  });
+
+  steps.push(exitStep(familyOf(p.category), p.name, chain, gas));
+
+  steps.push({
+    text: `Watch only ${p.name}'s own site or app for a launch or a claim notice, and never pay a fee or sign a permit to claim a token.`,
+    cost: 'no fee to claim, ever', time: '10 minutes a week',
+  });
+
+  if (peers < 3) {
+    steps.push({
+      text: `This category has ${peers === 0 ? 'no' : peers === 1 ? 'one' : peers} priced token${peers === 1 ? '' : 's'} in the snapshot, so its multiple is mostly the market's size curve. Size the position at the smaller figure and treat the value as a range.`,
+      cost: 'the position is smaller, not the risk', time: '10 minutes to reconsider',
+    });
+  }
+  steps.push({
+    text: `Write the wallet, every transaction hash, the deposit date and the position's value in a farm log, so the position can be repeated or unwound without guesswork.`,
+    cost: 'nothing beyond the log', time: '5 minutes a week',
+  });
+
+  return steps;
+}
+
+/** A step as one string: its action, then its cost and time, within the gate's 20..600 characters. */
+export function stepText(step: FarmStep): string {
+  let s = `${step.text} Cost: ${step.cost}. Time: ${step.time}.`;
+  if (s.length > 600) s = `${s.slice(0, 596)}...`;
+  if (s.length < 20) s = `${s} Check the protocol's own page before you act.`;
+  return s;
 }
 
 /** The snapshot out of a file's text, refused unless it is the shape this model scores. */
@@ -595,8 +869,8 @@ export function dataScript(radar: RadarData): string {
 }
 
 /**
- * The build manifest the dossier shows beside the page's source: the model's constants, the market's
- * own peer figures, and the top of the board with every factor that produced each value. Written into
+ * The build manifest the dossier shows beside the page's source: the fitted size curve, the categories'
+ * premiums and the top of the board with every factor that produced each value. Written into
  * /output/dashboard/ by main.ts; it is the only dashboard file the program generates.
  */
 export function previewManifest(radar: RadarData): string {
@@ -609,7 +883,8 @@ export function previewManifest(radar: RadarData): string {
     snapshot,
     model: {
       version: radar.model.version,
-      formula: 'round(tvl_usd * peer_multiple * momentum * tenure)',
+      formula: 'round(tvl_usd * size_multiple * category_premium * momentum * tenure)',
+      curve: radar.model.fit,
       market: radar.model.global,
       k: radar.model.peer_shrink,
       growth_weight: radar.model.growth_weight,
@@ -622,11 +897,14 @@ export function previewManifest(radar: RadarData): string {
       tvl_usd: r.tvl_usd,
       change_7d: r.change_7d,
       age_days: r.age_days,
+      size_multiple: r.factors.size_multiple,
+      category_premium: r.factors.category_premium,
       peer_multiple: r.factors.peer_multiple,
       peer_peers: r.factors.peer_peers,
       momentum: r.factors.momentum,
       tenure: r.factors.tenure,
       implied_value_usd: r.implied_value_usd,
+      farm_steps: r.farm_steps.length,
     })),
   };
   return `${JSON.stringify(doc, null, 1)}\n`;
